@@ -1,0 +1,24 @@
+name: Manifest Stability
+
+on:
+  pull_request:
+    paths:
+      - 'MANIFEST.yaml'
+
+jobs:
+  check-id-stability:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0  # Need full history for git show
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Install dependencies
+        run: pip install pyyaml
+
+      - name: Check no stable ID was removed
+        run: python scripts/check-manifest-stability.py
