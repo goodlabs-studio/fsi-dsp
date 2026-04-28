@@ -1,0 +1,49 @@
+# fsi-dsp project environment
+# Provides Python 3.11 (matching CI), Terraform, Ansible, and testing tools
+# Modeled after cflt-ai manifest.toml — see Pitfall 1 in 00-RESEARCH.md
+
+schema-version = "1.11.0"
+
+[install]
+python311.pkg-path = "python311"
+uv.pkg-path = "uv"
+git.pkg-path = "git"
+jq.pkg-path = "jq"
+gnumake.pkg-path = "gnumake"
+
+[hook]
+on-activate = """
+  fsidsp_setup_python() {
+    local venv="${FLOX_ENV_CACHE:-}/venv"
+    if [ ! -d "$venv" ]; then
+      uv venv "$venv" --python python3.11 --quiet
+    fi
+    if [ -f "$venv/bin/activate" ]; then
+      source "$venv/bin/activate"
+    fi
+    local stamp="${FLOX_ENV_CACHE:-}/.deps_installed"
+    if [ ! -f "$stamp" ]; then
+      uv pip install --python "$venv/bin/python" --quiet \
+        pyyaml pytest ansible-lint yamllint
+      touch "$stamp"
+    fi
+  }
+
+  fsidsp_show_status() {
+    echo "  fsi-dsp ready | python: $(python3.11 --version 2>/dev/null || echo 'not found')"
+  }
+
+  fsidsp_setup_python
+  fsidsp_show_status
+"""
+
+[profile]
+common = """
+  export VIRTUAL_ENV="${FLOX_ENV_CACHE:-}/venv"
+  export PATH="$VIRTUAL_ENV/bin:$PATH"
+"""
+
+# CRITICAL: must target all architectures — see cflt-ai manifest.toml
+# GitHub Actions CI runs on x86_64-linux; local dev is aarch64-darwin
+[options]
+systems = ["aarch64-darwin", "x86_64-darwin", "x86_64-linux", "aarch64-linux"]
