@@ -1,0 +1,327 @@
+# MANIFEST.yaml v1 — Stable contract between fsi-dsp and cflt-ai
+# Every asset in this file has a stable ID that MUST NOT be removed
+# without a major version bump. See CNTR-04 CI enforcement.
+version: "1.0.0"
+schema: "fsi-dsp/manifest/v1"
+
+capabilities:
+  # ──────────────────────────────────────────────────
+  # Ansible Roles (9)
+  # ──────────────────────────────────────────────────
+  - id: "role/cp_topic"
+    type: ansible-role
+    name: "cp_topic"
+    path: "ansible/roles/cp_topic"
+    description: "Create and manage governed Kafka topics on Confluent Platform"
+
+  - id: "role/cp_schema"
+    type: ansible-role
+    name: "cp_schema"
+    path: "ansible/roles/cp_schema"
+    description: "Register and manage Avro schemas in Confluent Schema Registry"
+
+  - id: "role/cp_rbac"
+    type: ansible-role
+    name: "cp_rbac"
+    path: "ansible/roles/cp_rbac"
+    description: "Provision role bindings for Confluent Platform RBAC"
+
+  - id: "role/cp_connect"
+    type: ansible-role
+    name: "cp_connect"
+    path: "ansible/roles/cp_connect"
+    description: "Deploy and configure Kafka Connect distributed workers"
+
+  - id: "role/cp_dr_mm2"
+    type: ansible-role
+    name: "cp_dr_mm2"
+    path: "ansible/roles/cp_dr_mm2"
+    description: "Configure MirrorMaker 2 for cross-cluster replication"
+
+  - id: "role/cp_dr_mrc"
+    type: ansible-role
+    name: "cp_dr_mrc"
+    path: "ansible/roles/cp_dr_mrc"
+    description: "Configure multi-region cluster for DR replication"
+
+  - id: "role/cp_observability"
+    type: ansible-role
+    name: "cp_observability"
+    path: "ansible/roles/cp_observability"
+    description: "Deploy observability agents and metric exporters"
+
+  - id: "role/cfk_operator"
+    type: ansible-role
+    name: "cfk_operator"
+    path: "ansible/roles/cfk_operator"
+    description: "Install Confluent for Kubernetes operator on OpenShift"
+
+  - id: "role/cfk_topic"
+    type: ansible-role
+    name: "cfk_topic"
+    path: "ansible/roles/cfk_topic"
+    description: "Manage Kafka topics via CFK custom resources"
+
+  # ──────────────────────────────────────────────────
+  # Terraform Modules (2)
+  # ──────────────────────────────────────────────────
+  - id: "module/topic"
+    type: terraform-module
+    name: "topic"
+    path: "modules/topic"
+    description: "Single-call governed topic: topic + schema + RBAC + DR mirror"
+
+  - id: "module/flink"
+    type: terraform-module
+    name: "flink"
+    path: "modules/flink"
+    description: "Flink compute pool and statement provisioning on Confluent Cloud"
+
+  # ──────────────────────────────────────────────────
+  # Scenarios (6)
+  # ──────────────────────────────────────────────────
+  - id: "scenario/cc-aws"
+    type: scenario
+    name: "cc-aws"
+    path: "scenarios/cc-aws"
+    description: "Confluent Cloud on AWS starter kit"
+
+  - id: "scenario/cc-azure"
+    type: scenario
+    name: "cc-azure"
+    path: "scenarios/cc-azure"
+    description: "Confluent Cloud on Azure starter kit"
+
+  - id: "scenario/cc-gcp"
+    type: scenario
+    name: "cc-gcp"
+    path: "scenarios/cc-gcp"
+    description: "Confluent Cloud on GCP starter kit"
+
+  - id: "scenario/cfk-openshift"
+    type: scenario
+    name: "cfk-openshift"
+    path: "scenarios/cfk-openshift"
+    description: "Confluent for Kubernetes on OpenShift starter kit"
+
+  - id: "scenario/cp-rhel"
+    type: scenario
+    name: "cp-rhel"
+    path: "scenarios/cp-rhel"
+    description: "Confluent Platform on RHEL starter kit"
+
+  - id: "scenario/private-cloud"
+    type: scenario
+    name: "private-cloud"
+    path: "scenarios/private-cloud"
+    description: "Confluent Private Cloud starter kit"
+
+  # ──────────────────────────────────────────────────
+  # Architecture Decision Records (8 existing + 009 placeholder)
+  # ──────────────────────────────────────────────────
+  - id: "adr/001"
+    type: adr
+    name: "Avro over Protobuf"
+    path: "docs/adr/001-avro-over-protobuf.md"
+    status: accepted
+
+  - id: "adr/002"
+    type: adr
+    name: "Compatibility by tier"
+    path: "docs/adr/002-compatibility-by-tier.md"
+    status: accepted
+
+  - id: "adr/003"
+    type: adr
+    name: "Consul service discovery"
+    path: "docs/adr/003-consul-service-discovery.md"
+    status: accepted
+
+  - id: "adr/004"
+    type: adr
+    name: "On-prem Connect"
+    path: "docs/adr/004-onprem-connect.md"
+    status: accepted
+
+  - id: "adr/005"
+    type: adr
+    name: "Cluster Linking over MRC"
+    path: "docs/adr/005-cluster-linking-over-mrc.md"
+    status: accepted
+
+  - id: "adr/006"
+    type: adr
+    name: "OAuth vs API keys"
+    path: "docs/adr/006-oauth-vs-api-keys.md"
+    status: accepted
+
+  - id: "adr/007"
+    type: adr
+    name: "Topic naming"
+    path: "docs/adr/007-topic-naming.md"
+    status: accepted
+
+  - id: "adr/008"
+    type: adr
+    name: "DR tier classification"
+    path: "docs/adr/008-dr-tier-classification.md"
+    status: accepted
+
+  - id: "adr/009"
+    type: adr
+    name: "LinuxONE for z/OS Kafka offload"
+    path: "docs/adr/009-linuxone-kafka-offload.md"
+    status: proposed
+
+  # ──────────────────────────────────────────────────
+  # Reference Implementations (10)
+  # ──────────────────────────────────────────────────
+  - id: "reference/java-producer"
+    type: reference
+    name: "Java Producer"
+    path: "reference/java-producer"
+    description: "FSI-ready Java producer with idempotency, Avro, DLQ"
+
+  - id: "reference/java-consumer"
+    type: reference
+    name: "Java Consumer"
+    path: "reference/java-consumer"
+    description: "FSI-ready Java consumer with manual commit, Avro deserialization"
+
+  - id: "reference/dotnet-producer"
+    type: reference
+    name: ".NET Producer"
+    path: "reference/dotnet-producer"
+    description: ".NET Kafka producer for non-JVM teams"
+
+  - id: "reference/dotnet-consumer"
+    type: reference
+    name: ".NET Consumer"
+    path: "reference/dotnet-consumer"
+    description: ".NET Kafka consumer for non-JVM teams"
+
+  - id: "reference/python-producer"
+    type: reference
+    name: "Python Producer"
+    path: "reference/python-producer"
+    description: "Python Kafka producer with Avro serialization and DLQ"
+
+  - id: "reference/python-consumer"
+    type: reference
+    name: "Python Consumer"
+    path: "reference/python-consumer"
+    description: "Python Kafka consumer with manual commit and handler injection"
+
+  - id: "reference/flink-sql"
+    type: reference
+    name: "Flink SQL"
+    path: "reference/flink-sql"
+    description: "Flink SQL job examples for stream processing on Confluent Cloud"
+
+  - id: "reference/connect-configs"
+    type: reference
+    name: "Connect Configs"
+    path: "reference/connect-configs"
+    description: "JDBC source/sink connector configurations for multiple databases"
+
+  - id: "reference/integration-test"
+    type: reference
+    name: "Integration Test"
+    path: "reference/integration-test"
+    description: "End-to-end roundtrip test: produce, schema, consume, verify"
+
+  - id: "reference/local-dev"
+    type: reference
+    name: "Local Dev"
+    path: "reference/local-dev"
+    description: "Docker Compose stack for local Kafka/SR/Connect development"
+
+  # ──────────────────────────────────────────────────
+  # Operational Scripts (7)
+  # ──────────────────────────────────────────────────
+  - id: "script/mirror-failover"
+    type: script
+    name: "mirror-failover.sh"
+    path: "scripts/mirror-failover.sh"
+    description: "DR failover via Cluster Linking mirror promotion"
+
+  - id: "script/mirror-failback"
+    type: script
+    name: "mirror-failback.sh"
+    path: "scripts/mirror-failback.sh"
+    description: "DR failback to primary region after incident resolution"
+
+  - id: "script/fsi-dr"
+    type: script
+    name: "fsi-dr.sh"
+    path: "scripts/fsi-dr.sh"
+    description: "Orchestrated DR failover across Kafka, SR, and databases"
+
+  - id: "script/consul-flip-region"
+    type: script
+    name: "consul-flip-region.sh"
+    path: "scripts/consul-flip-region.sh"
+    description: "Atomic region flip via Consul KV for service discovery"
+
+  - id: "script/connect-pause-all"
+    type: script
+    name: "connect-pause-all.sh"
+    path: "scripts/connect-pause-all.sh"
+    description: "Pause all Kafka Connect connectors during maintenance"
+
+  - id: "script/validate-apply"
+    type: script
+    name: "validate-apply.sh"
+    path: "scripts/validate-apply.sh"
+    description: "Pre-flight validation before Terraform apply"
+
+  - id: "script/validate-fips"
+    type: script
+    name: "validate-fips.sh"
+    path: "scripts/validate-fips.sh"
+    description: "Validate FIPS 140-2 compliance on target nodes"
+
+  # ──────────────────────────────────────────────────
+  # Observability Configs (6 + 1 doc)
+  # ──────────────────────────────────────────────────
+  - id: "observability/datadog"
+    type: observability
+    name: "Datadog"
+    path: "observability/datadog"
+    description: "Datadog dashboard and monitor templates for Kafka/Flink"
+
+  - id: "observability/dynatrace"
+    type: observability
+    name: "Dynatrace"
+    path: "observability/dynatrace"
+    description: "Dynatrace metric and alerting configuration for Kafka"
+
+  - id: "observability/grafana"
+    type: observability
+    name: "Grafana"
+    path: "observability/grafana"
+    description: "Grafana dashboard JSON models for Kafka monitoring"
+
+  - id: "observability/instana"
+    type: observability
+    name: "Instana"
+    path: "observability/instana"
+    description: "Instana sensor configuration for Kafka tracing"
+
+  - id: "observability/newrelic"
+    type: observability
+    name: "New Relic"
+    path: "observability/newrelic"
+    description: "New Relic integration for Kafka metrics and logs"
+
+  - id: "observability/splunk"
+    type: observability
+    name: "Splunk"
+    path: "observability/splunk"
+    description: "Splunk log forwarding and dashboard for Kafka operations"
+
+  - id: "observability/metrics-mapping"
+    type: observability
+    name: "Metrics Mapping"
+    path: "observability/metrics-mapping.md"
+    description: "Cross-provider metric name mapping reference"
