@@ -1,7 +1,7 @@
 # MANIFEST.yaml v1 — Stable contract between fsi-dsp and cflt-ai
 # Every asset in this file has a stable ID that MUST NOT be removed
 # without a major version bump. See CNTR-04 CI enforcement.
-version: "1.0.0"
+version: "1.1.0"
 schema: "fsi-dsp/manifest/v1"
 
 capabilities:
@@ -117,7 +117,7 @@ capabilities:
     description: "Confluent Private Cloud starter kit"
 
   # ──────────────────────────────────────────────────
-  # Architecture Decision Records (8 existing + 009 placeholder)
+  # Architecture Decision Records (10)
   # ──────────────────────────────────────────────────
   - id: "adr/001"
     type: adr
@@ -173,8 +173,14 @@ capabilities:
     path: "docs/adr/009-linuxone-kafka-offload.md"
     status: proposed
 
+  - id: "adr/010"
+    type: adr
+    name: "Low-latency Azure Kafka client profile"
+    path: "docs/adr/010-low-latency-azure-kafka-profile.md"
+    status: accepted
+
   # ──────────────────────────────────────────────────
-  # Reference Implementations (10)
+  # Reference Implementations (14)
   # ──────────────────────────────────────────────────
   - id: "reference/java-producer"
     type: reference
@@ -187,6 +193,27 @@ capabilities:
     name: "Java Consumer"
     path: "reference/java-consumer"
     description: "FSI-ready Java consumer with manual commit, Avro deserialization"
+
+  - id: "reference/java-producer-low-latency-azure"
+    type: reference
+    name: "Java Producer (Low-Latency Azure)"
+    path: "reference/java-producer-low-latency-azure"
+    description: "Java producer variant: latency-favored tuning + ILB-aware connection management. See ADR-010."
+    capabilities:
+      latency_tier: sub_100ms
+      cloud: azure
+      connection_resilience: ilb_aware
+
+  - id: "reference/java-consumer-low-latency-azure"
+    type: reference
+    name: "Java Consumer (Low-Latency Azure)"
+    path: "reference/java-consumer-low-latency-azure"
+    description: "Java consumer variant: cooperative-sticky + static membership, decoupled poll/process with backpressure, ILB-aware connection management. See ADR-010."
+    capabilities:
+      latency_tier: sub_100ms
+      cloud: azure
+      connection_resilience: ilb_aware
+      backpressure: queue_decoupled
 
   - id: "reference/dotnet-producer"
     type: reference
@@ -211,6 +238,26 @@ capabilities:
     name: "Python Consumer"
     path: "reference/python-consumer"
     description: "Python Kafka consumer with manual commit and handler injection"
+
+  - id: "reference/python-producer-low-latency-azure"
+    type: reference
+    name: "Python Producer (Low-Latency Azure)"
+    path: "reference/python-producer-low-latency-azure"
+    description: "Python producer variant: latency-favored tuning + ILB-aware connection management. See ADR-010."
+    capabilities:
+      latency_tier: sub_100ms
+      cloud: azure
+      connection_resilience: ilb_aware
+
+  - id: "reference/python-consumer-low-latency-azure"
+    type: reference
+    name: "Python Consumer (Low-Latency Azure)"
+    path: "reference/python-consumer-low-latency-azure"
+    description: "Python consumer variant: latency-favored tuning, cooperative-sticky + static membership, ILB-aware connection management. See ADR-010."
+    capabilities:
+      latency_tier: sub_100ms
+      cloud: azure
+      connection_resilience: ilb_aware
 
   - id: "reference/flink-sql"
     type: reference
