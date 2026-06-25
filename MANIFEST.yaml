@@ -1,7 +1,7 @@
 # MANIFEST.yaml v1 — Stable contract between fsi-dsp and cflt-ai
 # Every asset in this file has a stable ID that MUST NOT be removed
 # without a major version bump. See CNTR-04 CI enforcement.
-version: "1.1.0"
+version: "1.2.0"
 schema: "fsi-dsp/manifest/v1"
 
 capabilities:
@@ -63,7 +63,7 @@ capabilities:
     description: "Manage Kafka topics via CFK custom resources"
 
   # ──────────────────────────────────────────────────
-  # Terraform Modules (2)
+  # Terraform Modules (3)
   # ──────────────────────────────────────────────────
   - id: "module/topic"
     type: terraform-module
@@ -76,6 +76,12 @@ capabilities:
     name: "flink"
     path: "modules/flink"
     description: "Flink compute pool and statement provisioning on Confluent Cloud"
+
+  - id: "module/cc-cluster-basic"
+    type: terraform-module
+    name: "cc-cluster-basic"
+    path: "modules/cc-cluster-basic"
+    description: "Provisions a Basic-tier Confluent Cloud Kafka cluster (single-zone, no CL destination, no mTLS, no private networking) inside an existing environment. Outputs are shaped for scenario/cc-* clusters.auto.tfvars consumption. Smoke/dev only — Basic cannot satisfy FSI production canon (no multi-AZ, no DR cluster linking)."
 
   # ──────────────────────────────────────────────────
   # Scenarios (6)
