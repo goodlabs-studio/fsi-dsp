@@ -10,17 +10,36 @@
 #   3 brokers + 2 TaskManagers, 32 IFLs dedicated, 212 GB central storage.
 #
 # THE CPU NUMBERS BELOW ARE NOT THE SIZER'S vCPU NUMBERS. The sizer reports a
-# consolidated *x86-reference* footprint (12 vCPU/broker) which it divides by
-# the 8:1 Kafka consolidation ratio to reach physical IFLs. Kubernetes does not
-# schedule against x86-reference vCPU -- it schedules against the LOGICAL CPUs
-# the LPAR exposes, and under SMT-2 one IFL presents two of them:
+# consolidated *x86-reference* footprint which it divides by the 8:1 Kafka
+# consolidation ratio to reach physical IFLs. Kubernetes does not schedule
+# against x86-reference vCPU -- it schedules against the LOGICAL CPUs the LPAR
+# exposes, and under SMT-2 one IFL presents two of them.
 #
-#   Kafka tier: 36 x86 vCPU / 8:1 = 5 IFLs -> 5 x 2 = 10 logical vCPU
-#               10 logical vCPU / 3 brokers = 3.33 vCPU per broker pod
+# ---------------------------------------------------------------------------
+# THE BROKER TIER IS TRIMMED TO 10 x86-ref vCPU, NOT THE SIZER DEFAULT OF 12.
+# ---------------------------------------------------------------------------
+# The 32-IFL LPAR allocation is FIXED and cannot be revised. At the sizer's
+# 12 vCPU/broker default the estate consumes all 32 IFLs and all 212 GB with
+# nothing left, so Kafka Connect -- which z-stream-sizer does not model at all
+# -- had nowhere to go. Trimming the broker tier frees exactly what Connect
+# needs:
 #
-# Requesting cpu: 12 per broker here would overcommit the Kafka tier by ~3.6x
-# and the pods would sit Pending. See:
+#   12 x86-ref vCPU/broker: 36 / 8:1 = 4.5 -> 5 IFLs   (estate = 32, 0 spare)
+#   10 x86-ref vCPU/broker: 30 / 8:1 = 3.75 -> 4 IFLs  (estate = 31, 1 spare)
+#
+# That freed IFL carries the Connect tier, landing the whole estate at exactly
+# 32 IFLs / 207 GB. Verified against the sizer engine, not by hand.
+#
+#   Kafka tier: 30 x86-ref vCPU / 8:1 = 4 IFLs -> 4 x 2 = 8 logical vCPU
+#               8 logical vCPU / 3 brokers = 2.67 vCPU per broker pod
+#
+# Requesting cpu: 10 (let alone 12) per broker here would overcommit the tier
+# several times over and the pods would sit Pending. See:
 #   wiki concepts/confluent-on-s390x-support-and-ifl-sizing.md ("IFLs vs vCPUs vs Pods")
+#
+# This is a DEMO trade: brokers are the least-loaded component in a MongoDB
+# CDC demo, so the capacity comes from where it is least missed. Do not carry
+# this trim into a production sizing without re-running the sizer.
 # =============================================================================
 
 kafka:
@@ -33,23 +52,23 @@ kafka:
     init: confluentinc/confluent-init-container:2.11.0
     pullPolicy: IfNotPresent
 
-  # --- Sized to the Kafka tier's 5 IFLs / 10 logical vCPU -------------------
+  # --- Sized to the Kafka tier's 4 IFLs / 8 logical vCPU --------------------
   # Request is the steady-state floor; limit gives burst headroom into the
   # tier's spare thread capacity without letting one broker starve the others.
   resources:
     requests:
-      cpu: "3300m"
-      memory: "32Gi"   # 16 GB JVM heap + 16 GB page cache (PageCacheRatio 1.0)
+      cpu: "2666m"
+      memory: "28Gi"   # 14 GB JVM heap + 14 GB page cache (PageCacheRatio 1.0)
     limits:
-      cpu: "5000m"
-      memory: "32Gi"   # limit == request: page cache behaviour is why we sized it
+      cpu: "4000m"
+      memory: "28Gi"   # limit == request: page cache behaviour is why we sized it
 
   # JVM heap is half the pod memory; the rest is deliberately left to the page
   # cache, which is what actually serves Kafka reads.
   configOverrides:
     jvm:
-      - "-Xms16G"
-      - "-Xmx16G"
+      - "-Xms14G"
+      - "-Xmx14G"
 
   storage:
     # 38.88 TB usable across the cluster (50 MB/s, 3d retention, RF 3).

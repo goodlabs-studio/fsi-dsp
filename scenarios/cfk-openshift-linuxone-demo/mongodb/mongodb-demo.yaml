@@ -11,27 +11,31 @@
 # TWO THINGS THAT WILL BREAK THIS DEMO IF YOU SKIP THEM
 # ---------------------------------------------------------------------------
 #
-# 1. ARCHITECTURE. MongoDB Community does not reliably publish s390x container
-#    images. Confluent runs on s390x; MongoDB may not. VERIFY BEFORE DEPLOYING:
+# 1. IMAGE SOURCE. MongoDB IS supported on s390x -- it ships under the
+#    MongoDB/IBM OEM agreement for LinuxONE. What you will NOT find is a
+#    community s390x manifest on Docker Hub: `docker.io/library/mongo` is
+#    x86/arm only, because the Z build is distributed through IBM rather than
+#    published to the public registry.
 #
-#      podman manifest inspect docker.io/library/mongo:7 | grep -i s390x
+#    So: pull the OEM image from the IBM-provided registry (or your internal
+#    mirror of it) and set it below. Do NOT fall back to the community tag and
+#    do NOT run it under QEMU emulation -- the ~10x throughput penalty makes
+#    change-stream latency meaningless as a demo.
 #
-#    If that returns nothing, you have three options, in order of preference:
-#      a) Run MongoDB on an x86 worker in a mixed-arch OCP cluster (the
-#         default below -- no arch affinity is set, so the scheduler places it
-#         wherever it fits). Connect still runs on s390x and reaches it over
-#         the cluster network.
-#      b) Point the demo at an existing MongoDB outside the cluster; delete
-#         this file and set connection_uri in the secret to that host.
-#      c) Build MongoDB from the s390x tarball (see the L1 reference
-#         architecture note: "WiredTiger; ensure s390x tarball").
-#    Do NOT run it under QEMU emulation -- the throughput penalty is ~10x and
-#    change-stream latency becomes meaningless as a demo.
+#    This pod is pinned to s390x on purpose. It runs in-frame alongside
+#    Confluent, which is the whole point of an L1 demo: the operational store
+#    and the streaming platform on the same machine.
 #
 # 2. REPLICA SET. MongoDB change streams REQUIRE a replica set. A standalone
 #    mongod cannot feed the source connector -- it fails with
 #    "The $changeStream stage is only supported on replica sets". Even a
 #    single node must be initiated as one. The Job at the bottom does that.
+#
+# NOTE ON SIZING: this MongoDB pod is NOT in the 32-IFL Confluent BoM.
+# z-stream-sizer models the Confluent estate only. On a shared LPAR its
+# 500m/2Gi request competes with Confluent; on the L1 reference architecture
+# the operational stores get their own LPAR. Confirm which applies before
+# treating the 32 IFLs as covering this too.
 # =============================================================================
 apiVersion: v1
 kind: Service
@@ -70,13 +74,27 @@ spec:
       labels:
         app: mongodb-demo
     spec:
-      # NO arch affinity on purpose -- see note 1 above. In a mixed-arch
-      # cluster this lands on whatever node has an image for it, which is
-      # usually x86. Add an s390x nodeAffinity block here ONLY after
-      # confirming an s390x manifest exists.
+      # Pinned to s390x: the OEM MongoDB build runs in-frame beside Confluent.
+      affinity:
+        nodeAffinity:
+          requiredDuringSchedulingIgnoredDuringExecution:
+            nodeSelectorTerms:
+              - matchExpressions:
+                  - key: kubernetes.io/arch
+                    operator: In
+                    values:
+                      - s390x
+      tolerations:
+        - key: "arch"
+          operator: "Equal"
+          value: "s390x"
+          effect: "NoSchedule"
       containers:
         - name: mongodb
-          image: mongo:7
+          # IBM/MongoDB OEM s390x image. Substitute the tag from the IBM
+          # entitlement or your internal mirror -- there is no community
+          # s390x manifest to fall back to.
+          image: <PLACEHOLDER_IBM_OEM_MONGODB_S390X_IMAGE>
           args:
             - "--replSet"
             - "rs0"
@@ -131,9 +149,25 @@ spec:
   template:
     spec:
       restartPolicy: OnFailure
+      affinity:
+        nodeAffinity:
+          requiredDuringSchedulingIgnoredDuringExecution:
+            nodeSelectorTerms:
+              - matchExpressions:
+                  - key: kubernetes.io/arch
+                    operator: In
+                    values:
+                      - s390x
+      tolerations:
+        - key: "arch"
+          operator: "Equal"
+          value: "s390x"
+          effect: "NoSchedule"
       containers:
         - name: rs-init
-          image: mongo:7
+          # Same OEM s390x image -- this Job only needs mongosh, but it must
+          # be the s390x build to schedule on an s390x-pinned cluster.
+          image: <PLACEHOLDER_IBM_OEM_MONGODB_S390X_IMAGE>
           env:
             - name: MONGO_USER
               valueFrom:

@@ -7,23 +7,34 @@
 # deliberate there and deliberately dropped here.
 #
 # ---------------------------------------------------------------------------
-# BUDGET WARNING: Connect is NOT in the 32-IFL BoM.
+# BUDGET: Connect fits INSIDE the fixed 32-IFL BoM, paid for by trimming the
+# broker tier. It is not an addition to the ask.
 # ---------------------------------------------------------------------------
 # z-stream-sizer models four control-plane components -- KRaft, Schema
 # Registry, Control Center, CMF -- and no Connect tier at all (verified: no
-# occurrence of "connect" in sizing.go or web/index.html). The 32 IFLs are
-# fully consumed by 3 brokers + 2 TaskManagers + control plane + OCP tax.
+# occurrence of "connect" in sizing.go or web/index.html). Schema Registry is
+# inside the 11-IFL control-plane budget; Connect is not modelled anywhere.
 #
-# This cluster therefore adds capacity ON TOP of the BoM:
+# The 32-IFL LPAR allocation is fixed. Rather than raise the ask, the broker
+# tier was trimmed from the sizer's 12 x86-ref vCPU to 10, which drops the
+# Kafka tier from 5 IFLs to 4 and frees exactly one IFL for Connect:
 #
-#   2 workers x 2000m = 4 logical vCPU = 2 IFLs  (SMT-2)
+#   2 workers x 1000m = 2 logical vCPU = 1 IFL   (SMT-2: ceil(2/2))
 #   2 workers x 4 Gi  = 8 GB central storage
-#   => running total 34 IFLs / ~220 GB
+#   => estate total 32 IFLs / 207 GB -- inside 32 / 212, with 5 GB spare
 #
-# That 2-IFL figure is a demo-scale estimate, not a sizer output. Take it to
-# the mainframe team as an estimate. A production Connect tier carrying real
-# CDC volume is materially larger -- the prod scenario requests 1500m/3Gi and
-# bursts to 6000m/12Gi per worker.
+# WHY TWO WORKERS AT 1000m RATHER THAN ONE AT 2000m: both cost exactly 1 IFL,
+# because SMT-2 rounding makes ceil(2x1/2) and ceil(1x2/2) identical. Two
+# workers therefore buy worker-restart survivability for 4 GB of RAM and zero
+# IFLs. The source connector's 1 task and the sink's 2 also distribute rather
+# than stacking on one JVM.
+#
+# To go the other way -- one worker with a full 2 vCPU -- set replicas: 1 and
+# cpu: "2000m". Same IFL cost, 4 GB cheaper, no HA.
+#
+# The 1-IFL figure is a demo-scale local estimate, NOT a sizer output. A
+# production Connect tier carrying real CDC volume is materially larger: the
+# prod scenario requests 1500m/3Gi and bursts to 6000m/12Gi per worker.
 # =============================================================================
 
 connect:
@@ -44,11 +55,15 @@ connect:
 
   resources:
     requests:
-      cpu: "2000m"
+      cpu: "1000m"
       memory: "4Gi"
     limits:
-      cpu: "3000m"
-      memory: "6Gi"
+      # Burst ceiling only. The 1 IFL budgeted for this tier is 2 logical
+      # vCPU total across both workers; the limit lets a single worker take
+      # the whole tier briefly during a copy_existing snapshot rather than
+      # reserving it.
+      cpu: "2000m"
+      memory: "4Gi"
 
   podTemplate:
     affinity:

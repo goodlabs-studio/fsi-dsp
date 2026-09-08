@@ -10,27 +10,41 @@
 demo_namespace: confluent
 demo_scenario_dir: "{{ playbook_dir }}/../../scenarios/cfk-openshift-linuxone-demo"
 
-# --- LPAR allocation --------------------------------------------------------
-# NOT the BoM figure. The BoM is 32 IFLs / 212 GB, and that is exactly
-# consumed by 3 brokers + 2 TaskManagers + control plane + OCP tax, with zero
-# spare. Adding the Connect tier this demo requires pushes it to 34 / 220.
-#
-# This is a DOCUMENTED widening of the budget, not a quiet one:
-#   32 IFLs  + 2 for Connect (2 workers x 2 logical vCPU / SMT-2) = 34
-#   212 GB   + 8 for Connect (2 workers x 4 GB)                   = 220
-#
-# Take 34 IFLs / 220 GB to the mainframe team as the revised ask. To see the
-# gate reject the un-widened BoM instead, run with:
-#   -e lpar_ifl_budget=32 -e lpar_ram_gb=212
-# To size without Connect at all, set connect_replicas: 0 and the original
-# 32 / 212 passes exactly.
-lpar_ifl_budget: 34
-lpar_ram_gb: 220
+# --- LPAR allocation (FIXED -- the z16 BoM, not revisable) -------------------
+# 32 IFLs / 212 GB is what the mainframe team allocated. It took weeks to
+# obtain and is not being renegotiated. Everything below fits inside it.
+lpar_ifl_budget: 32
+lpar_ram_gb: 212
 
 # --- Topology ---------------------------------------------------------------
 kafka_brokers: 3
 flink_taskmanagers: 2
 connect_replicas: 2
+
+# --- Fitting Connect inside a fixed 32 IFLs ---------------------------------
+# z-stream-sizer does not model a Connect tier at all, and at its default
+# 12 x86-ref vCPU/broker the Confluent estate consumes all 32 IFLs and all
+# 212 GB with zero spare -- so Connect had nowhere to live.
+#
+# Rather than raise the ask, the BROKER tier is trimmed. Brokers are the
+# least-loaded component in a MongoDB CDC demo, so the capacity is taken
+# where it is least missed:
+#
+#   sizer default (12 vCPU, 16 GB heap): 36/8 = 4.5 -> 5 IFLs, estate 32/212
+#   trimmed here  (10 vCPU, 14 GB heap): 30/8 = 3.75 -> 4 IFLs, estate 31/199
+#                                        + Connect 1 IFL / 8 GB = 32 / 207
+#
+# Result: exactly 32 IFLs, 207 GB, 5 GB spare. Verified against the sizer
+# engine. Do NOT carry this trim into a production sizing -- re-run the sizer.
+vcpu_per_broker: 10
+broker_heap_gb: 14
+broker_page_cache_gb: 14
+
+# Two workers at 1000m cost the same 1 IFL as one worker at 2000m, because
+# SMT-2 rounding makes ceil(2x1/2) == ceil(1x2/2). Two therefore buys
+# worker-restart survivability for 4 GB and zero IFLs.
+connect_cpu_logical_per_replica: 1
+connect_ram_gb_per_replica: 4
 
 # --- Storage ----------------------------------------------------------------
 # 38.88 TB usable = 50 MB/s x 86400 s x 3 days x RF 3. Independent of broker

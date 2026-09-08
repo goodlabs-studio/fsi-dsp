@@ -17,8 +17,8 @@ dedicated-IFL z16 LPAR.
 |---|---|
 | Target architecture | IBM z16 (Telum), 4 chips |
 | LPAR profile | Dedicated IFLs |
-| Physical IFLs | **32** (BoM) → **34** with Connect |
-| Central storage | **212 GB** (BoM) → **220 GB** with Connect |
+| Physical IFLs | **32** — fixed, Connect fits inside |
+| Central storage | **212 GB** — 207 used, 5 GB spare |
 | Storage fabric | FICON |
 | Usable storage | **38.88 TB** (50 MB/s, 3d retention, RF 3) |
 | Topology | OpenShift Container Platform |
@@ -28,22 +28,42 @@ dedicated-IFL z16 LPAR.
 ### Where the 32 IFLs go
 
 ```
-  Kafka tier          5   (3 brokers x 12 x86-ref vCPU / 8:1)
+  Kafka tier          4   (3 brokers x 10 x86-ref vCPU / 8:1)   <- trimmed
   Flink tier          8   (2 TaskManagers x 8 x86-ref vCPU / 2:1)
   Control plane      11   (KRaft + Schema Registry + Control Center + CMF)
   OCP platform tax    8   (6 static master/infra + 10% of workload)
+  Connect             1   (2 workers x 1000m, locally estimated)
   ----------------------
-  BoM total          32
-  Connect            +2   (locally estimated -- see below)
-  ----------------------
-  Actual ask         34
+  TOTAL              32   exactly the allocation
 ```
 
-**Only 13 of the 32 IFLs are workload.** The other 19 are fixed overhead paid
+**Only 12 of the 32 IFLs are workload.** The other 20 are fixed overhead paid
 once. That is where the headroom lives — not in spare engines, but in a cheap
 marginal cost: roughly **+1 IFL per broker, +4 per TaskManager**. Storage is
 the one genuinely slack dimension: 38.88 TB is ingest-driven and does not move
 with broker count.
+
+### How Connect was fitted without raising the ask
+
+At the sizer's default 12 x86-ref vCPU per broker the Confluent estate
+consumes **all 32 IFLs and all 212 GB with zero spare**, and Connect — which
+`z-stream-sizer` does not model at all — had nowhere to go. The LPAR
+allocation is fixed, so the **broker tier was trimmed instead**:
+
+| | Broker x86-ref vCPU | Kafka tier | Estate | Broker pod |
+|---|---|---|---|---|
+| Sizer default | 12 | 5 IFLs | 32 IFL / 212 GB (0 spare) | 3333m / 32Gi |
+| **This demo** | **10** | **4 IFLs** | **31 IFL / 199 GB** | **2666m / 28Gi** |
+| + Connect | | +1 IFL | **32 IFL / 207 GB** | |
+
+Brokers are the least-loaded component in a MongoDB CDC demo, so the capacity
+comes from where it is least missed. **Do not carry this trim into a
+production sizing** — re-run the sizer.
+
+Note that two Connect workers at 1000m cost the *same one IFL* as one worker
+at 2000m, because SMT-2 rounding makes `ceil(2x1/2)` and `ceil(1x2/2)`
+identical. Two workers therefore buy restart survivability for 4 GB of RAM and
+zero IFLs.
 
 ### Schema Registry is already paid for
 
@@ -54,7 +74,7 @@ Control Center, and CMF. It is not an unbudgeted addition.
 
 `z-stream-sizer` models exactly four control-plane components and **has no
 Connect tier** — there is no occurrence of "connect" anywhere in `sizing.go`
-or the UI. The +2 IFL / +8 GB figure here is a locally-derived demo-scale
+or the UI. The 1 IFL / 8 GB allocated here is a locally-derived demo-scale
 estimate, flagged separately everywhere it appears. A production Connect tier
 carrying real CDC volume is materially larger.
 
@@ -68,19 +88,22 @@ Kubernetes schedules against the logical CPUs the LPAR exposes, and under
 **SMT-2 one IFL presents two of them**:
 
 ```
-Kafka tier:  36 x86-ref vCPU / 8:1 = 5 IFLs
-             5 IFLs x 2 (SMT-2)     = 10 logical vCPU
-             10 / 3 brokers         = 3.33 vCPU per broker pod
+Kafka tier:  30 x86-ref vCPU / 8:1 = 4 IFLs
+             4 IFLs x 2 (SMT-2)     = 8 logical vCPU
+             8 / 3 brokers          = 2.67 vCPU per broker pod
 ```
 
-Requesting `cpu: 12` per broker would overcommit the Kafka tier ~3.6× and
-leave pods `Pending`.
+Requesting `cpu: 10` (let alone the sizer's 12) per broker would overcommit
+the tier several times over and leave pods `Pending`.
 
 | Component | IFLs | Logical vCPU | Per pod |
 |---|---|---|---|
-| Broker ×3 | 5 | 10 | `3300m` cpu, `32Gi` |
+| Broker ×3 | 4 | 8 | `2666m` cpu, `28Gi` |
 | TaskManager ×2 | 8 | 16 | `8` cpu, `16Gi` |
-| Connect ×2 | 2 | 4 | `2000m` cpu, `4Gi` |
+| Connect ×2 | 1 | 2 | `1000m` cpu, `4Gi` |
+
+Round pod requests **down** into the tier: three brokers at 2667m would ask
+for 8001m against 8000m and the third would never schedule.
 
 The TaskManager figure coincidentally equals the sizer's x86 number because
 the 2:1 Flink ratio and SMT-2 cancel. Do not generalise that to Kafka.
@@ -98,18 +121,25 @@ Check these **before** starting, not after a failure.
    artifacts at all. Note that `scenarios/cfk-openshift/connectors/README.md`
    pins `cp-server-connect:7.6.0` for the x86 path — that image **cannot run
    here**. Use `Dockerfile.connect` in this directory.
-3. **MongoDB on s390x.** MongoDB Community does not reliably publish s390x
-   images. Verify before deploying:
-   ```bash
-   podman manifest inspect docker.io/library/mongo:7 | grep -i s390x
-   ```
-   If empty, run MongoDB on an x86 worker in a mixed-arch cluster (the default
-   — `mongodb/mongodb-demo.yaml` sets no arch affinity), or point at an
-   external MongoDB. Do **not** run it under QEMU emulation; the ~10×
-   throughput penalty makes change-stream latency meaningless as a demo.
-   The Confluent side is fine on Z — the MongoDB *connector* is pure Java, and
-   per the support matrix only "connectors that rely on native OS libraries"
-   are excluded.
+3. **MongoDB OEM image for s390x.** MongoDB *is* supported on LinuxONE under
+   the MongoDB/IBM OEM agreement. What does not exist is a **community** s390x
+   manifest — `docker.io/library/mongo` is x86/arm only, because the Z build
+   is distributed through IBM rather than the public registry. Pull the OEM
+   image from the IBM-provided registry or your internal mirror and substitute
+   it for `<PLACEHOLDER_IBM_OEM_MONGODB_S390X_IMAGE>` in
+   `mongodb/mongodb-demo.yaml` (two places: the StatefulSet and the rs-init
+   Job). The pod is pinned to s390x so the operational store runs in-frame
+   beside Confluent, which is the point of an L1 demo. Do **not** substitute
+   the community tag under QEMU emulation; the ~10× throughput penalty makes
+   change-stream latency meaningless.
+   The connector side needs nothing special — the MongoDB Kafka Connector is
+   pure Java, and per the support matrix only "connectors that rely on native
+   OS libraries" are excluded on s390x.
+
+   Note the MongoDB pod is **not** inside the 32-IFL Confluent BoM —
+   `z-stream-sizer` models the Confluent estate only. On the L1 reference
+   architecture the operational stores get their own LPAR; on a shared LPAR
+   its 500m/2Gi competes with Confluent. Confirm which applies.
 4. **FICON storage class.** `oc get storageclass` — substitute the real name
    for `<PLACEHOLDER_FICON_STORAGE_CLASS>` in `values/kafka.yaml`.
 5. **Ansible collections.** `ansible-galaxy collection install kubernetes.core`

@@ -81,6 +81,26 @@
            * (1 + (os_ram_overhead_pct | float))) | round(0, 'ceil') | int)
          + ((connect_replicas | int) * (connect_ram_gb_per_replica | int)) }}
 
+# --- Derive the pod requests that actually go in the CRs ---------------------
+# FLOOR, not round: three brokers at a rounded-up 2667m would request 8001m
+# against a tier that only has 8000m, and the third pod would sit Pending.
+# Always round pod requests DOWN into the tier.
+- name: Derive per-broker CPU request (millicores)
+  ansible.builtin.set_fact:
+    _broker_cpu_millis: >-
+      {{ (((_kafka_ifls | int) * (vcpu_per_ifl | int) * 1000)
+          / (kafka_brokers | int)) | round(0, 'floor') | int }}
+
+- name: Derive per-TaskManager CPU request (whole vCPU)
+  ansible.builtin.set_fact:
+    _tm_cpu: >-
+      {{ (((_flink_ifls | int) * (vcpu_per_ifl | int))
+          / (flink_taskmanagers | int)) | round(0, 'floor') | int }}
+
+- name: Derive per-broker memory (heap + page cache)
+  ansible.builtin.set_fact:
+    _broker_mem_gb: "{{ (broker_heap_gb | int) + (broker_page_cache_gb | int) }}"
+
 # --- Report ------------------------------------------------------------------
 - name: Report LPAR budget vs demand
   ansible.builtin.debug:
@@ -91,14 +111,14 @@
       - "  Kafka tier         : {{ _kafka_ifls }}"
       - "  Flink tier         : {{ _flink_ifls }}"
       - "  Control plane      : {{ _control_plane_ifls }}  (KRaft + Schema Registry + C3 + CMF)"
-      - "  OCP platform tax   : {{ _ocp_tax_ifls }}  ({{ ocp_master_infra_ifls }} static + {{ ((ocp_worker_reservation_pct | float) * 100) | int }}% of workload)"
+      - "  OCP platform tax   : {{ _ocp_tax_ifls }}  ({{ ocp_master_infra_ifls }} static + reservation)"
       - "  Connect (estimate) : {{ _connect_ifls }}  <-- NOT modelled by z-stream-sizer"
       - "  TOTAL              : {{ _total_ifls }} / {{ lpar_ifl_budget }}"
       - "---- Central storage ----"
       - "  TOTAL              : {{ _total_ram_gb }} GB / {{ lpar_ram_gb }} GB"
       - "---- Pod sizing (SMT-2: 1 IFL = {{ vcpu_per_ifl }} logical vCPU) ----"
-      - "  Per broker         : {{ (((_kafka_ifls | int) * (vcpu_per_ifl | int) / (kafka_brokers | int)) * 1000) | round(0) | int }}m cpu, {{ (broker_heap_gb | int) + (broker_page_cache_gb | int) }}Gi memory"
-      - "  Per TaskManager    : {{ ((_flink_ifls | int) * (vcpu_per_ifl | int) / (flink_taskmanagers | int)) | round(0) | int }} cpu, {{ taskmanager_heap_gb }}Gi memory"
+      - "  Per broker         : {{ _broker_cpu_millis }}m cpu, {{ _broker_mem_gb }}Gi memory"
+      - "  Per TaskManager    : {{ _tm_cpu }} cpu, {{ taskmanager_heap_gb }}Gi memory"
 
 # --- Gate --------------------------------------------------------------------
 - name: Assert the topology fits the LPAR allocation
