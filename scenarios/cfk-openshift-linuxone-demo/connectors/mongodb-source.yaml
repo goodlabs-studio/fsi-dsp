@@ -1,0 +1,58 @@
+---
+# =============================================================================
+# MongoDB Source Connector -- DEMO (MongoDB change streams -> Kafka)
+# =============================================================================
+# Demo-grade variant of scenarios/cfk-openshift/connectors/mongodb-source.yaml.
+# Dropped vs that file: mTLS to Kafka, Vault-Agent credential reconciliation,
+# Schema Registry basic auth, the dedicated connect-databases cluster.
+# Kept: Avro + Schema Registry (Flink needs the schema), DLQ, error tolerance.
+#
+# Requires: replica set initiated (change streams do not work on a standalone
+# mongod) and mongodb/kafka-connect-mongodb in the Connect image.
+# =============================================================================
+apiVersion: platform.confluent.io/v1beta1
+kind: Connector
+metadata:
+  name: demo-mongodb-source-customer
+  namespace: confluent
+  labels:
+    app.kubernetes.io/part-of: fsi-linuxone-demo
+    fsi.io/connector-type: mongodb-source
+spec:
+  class: com.mongodb.kafka.connect.MongoSourceConnector
+  taskMax: 1
+  connectClusterRef:
+    name: connect
+  configs:
+    connection.uri: "${file:/mnt/secrets/mongodb:connection_uri}"
+    database: "demo"
+    collection: "customer"
+
+    # Emits to: demo.customer  (topic.prefix + '.' + db + '.' + collection
+    # would give demo.demo.customer, so the prefix is left empty and the
+    # topic name comes from the namespace mapping below).
+    topic.prefix: ""
+    topic.namespace.map: '{"demo.customer": "demo.customer.v1"}'
+
+    # updateLookup gives the FULL post-image on updates rather than just the
+    # changed fields -- without it, an update event carries a patch document
+    # and the Flink job downstream sees partial rows.
+    change.stream.full.document: "updateLookup"
+    publish.full.document.only: "true"
+
+    # Copy what is already in the collection before tailing the change stream,
+    # so the demo has data on first run instead of an empty topic.
+    startup.mode: "copy_existing"
+
+    output.format.key: "json"
+    output.format.value: "schema"
+    output.schema.infer.value: "true"
+
+    key.converter: "org.apache.kafka.connect.storage.StringConverter"
+    value.converter: "io.confluent.connect.avro.AvroConverter"
+    value.converter.schema.registry.url: "http://schemaregistry.confluent.svc.cluster.local:8081"
+
+    errors.tolerance: "all"
+    errors.deadletterqueue.topic.name: "demo.dlq.mongodb-source-customer"
+    errors.deadletterqueue.context.headers.enable: "true"
+    errors.log.enable: "true"

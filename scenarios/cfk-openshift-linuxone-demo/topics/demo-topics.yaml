@@ -1,0 +1,81 @@
+---
+# =============================================================================
+# KafkaTopic CRs -- DEMO
+# =============================================================================
+# Partition counts follow the canon starting point of 6 x peak MB/s, then get
+# reasoned down: this demo is nowhere near 50 MB/s per topic. Six partitions
+# gives the Flink job parallelism room (2 TaskManagers x 4 slots = 8 slots)
+# without creating rebalance overhead the demo will never justify.
+#
+# RF 3 with min.insync.replicas 2 is canon and is kept even for the demo --
+# with 3 brokers it costs nothing and it means a broker restart during a live
+# demo does not stall producers.
+#
+# DLQ topics are NOT auto-created by Connect. They are declared here because
+# both connectors reference them; without these the first bad record kills
+# the task instead of being diverted.
+# =============================================================================
+apiVersion: platform.confluent.io/v1beta1
+kind: KafkaTopic
+metadata:
+  name: demo-customer-v1
+  namespace: confluent
+  labels:
+    app.kubernetes.io/part-of: fsi-linuxone-demo
+spec:
+  name: demo.customer.v1
+  replicas: 3
+  partitionCount: 6
+  configs:
+    min.insync.replicas: "2"
+    retention.ms: "259200000"   # 3 days, matching the BoM retention
+    cleanup.policy: "delete"
+
+---
+apiVersion: platform.confluent.io/v1beta1
+kind: KafkaTopic
+metadata:
+  name: demo-customer-enriched-v1
+  namespace: confluent
+  labels:
+    app.kubernetes.io/part-of: fsi-linuxone-demo
+spec:
+  name: demo.customer.enriched.v1
+  replicas: 3
+  partitionCount: 6
+  configs:
+    min.insync.replicas: "2"
+    retention.ms: "259200000"
+    cleanup.policy: "delete"
+
+---
+apiVersion: platform.confluent.io/v1beta1
+kind: KafkaTopic
+metadata:
+  name: demo-dlq-mongodb-source-customer
+  namespace: confluent
+  labels:
+    app.kubernetes.io/part-of: fsi-linuxone-demo
+spec:
+  name: demo.dlq.mongodb-source-customer
+  replicas: 3
+  partitionCount: 1
+  configs:
+    min.insync.replicas: "2"
+    retention.ms: "604800000"   # 7 days -- DLQ outlives the data it rejects
+
+---
+apiVersion: platform.confluent.io/v1beta1
+kind: KafkaTopic
+metadata:
+  name: demo-dlq-mongodb-sink-customer-enriched
+  namespace: confluent
+  labels:
+    app.kubernetes.io/part-of: fsi-linuxone-demo
+spec:
+  name: demo.dlq.mongodb-sink-customer-enriched
+  replicas: 3
+  partitionCount: 1
+  configs:
+    min.insync.replicas: "2"
+    retention.ms: "604800000"

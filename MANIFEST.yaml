@@ -62,6 +62,12 @@ capabilities:
     path: "ansible/roles/cfk_topic"
     description: "Manage Kafka topics via CFK custom resources"
 
+  - id: "role/z_lpar_preflight"
+    type: ansible-role
+    name: "z_lpar_preflight"
+    path: "ansible/roles/z_lpar_preflight"
+    description: "Fail-closed IFL and central-storage budget gate for IBM Z / LinuxONE LPARs. Mirrors z-stream-sizer's computeIFLStack (Kafka/Flink/control-plane consolidation ratios + OCP platform tax) and asserts the configured topology fits the LPAR allocation before any CR is applied. Reports SMT-2 pod sizing (1 IFL = 2 logical vCPU), which is NOT the sizer's x86-reference vCPU figure."
+
   # ──────────────────────────────────────────────────
   # Terraform Modules (2)
   # ──────────────────────────────────────────────────
@@ -487,6 +493,12 @@ capabilities:
     name: "cfk-openshift-linuxone"
     path: "scenarios/cfk-openshift-linuxone"
     description: "CFK on OCP deployment scenario targeting IBM LinuxONE / s390x worker nodes. Helm-values + Ansible orchestration; precedes the kustomize-based accelerator/confluent-on-linuxone."
+
+  - id: "scenario/cfk-openshift-linuxone-demo"
+    type: scenario
+    name: "cfk-openshift-linuxone-demo"
+    path: "scenarios/cfk-openshift-linuxone-demo"
+    description: "DEMO-grade CFK + CMF Flink + Connect on OCP on IBM z16 (Telum), sized from z-stream-sizer to a 32-IFL/212 GB dedicated LPAR (34/220 with Connect). MongoDB source-to-Flink-to-sink round trip. Deliberately omits mTLS, RBAC, Vault and FIPS — not for regulated data; use scenario/cfk-openshift-linuxone plus the accelerator layers for production."
 
   - id: "scenario/cp-rhel-linuxone"
     type: scenario

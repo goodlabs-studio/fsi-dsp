@@ -1,0 +1,72 @@
+---
+# =============================================================================
+# z_lpar_preflight role -- Default variable values
+# =============================================================================
+# Fails closed when the configured Confluent topology does not fit the IFL and
+# central-storage allocation of the target LinuxONE LPAR.
+#
+# This exists because the failure it prevents is silent and late: OpenShift
+# accepts the CRs, schedules what fits, and leaves the rest Pending. On a demo
+# that surfaces as "the brokers came up but Flink never did", ten minutes into
+# a customer session.
+#
+# The arithmetic mirrors z-stream-sizer (github.com/goodlabs-studio/z-sizer,
+# sizing.go: computeIFLStack). Where the two disagree, the sizer wins -- it is
+# the source of truth for the BoM and this is a cheap in-line replica of it.
+# =============================================================================
+
+# --- LPAR allocation: what the mainframe team actually gave you --------------
+# Defaults are the z16 BoM: 32 dedicated IFLs, 212 GB central storage.
+lpar_ifl_budget: 32
+lpar_ram_gb: 212
+
+# --- Topology ---------------------------------------------------------------
+kafka_brokers: 3
+flink_taskmanagers: 2
+
+# --- Per-component x86-reference footprint (z-stream-sizer defaults) ---------
+# These are x86-REFERENCE vCPU, the unit the consolidation ratios divide.
+# They are NOT the values that go into a pod's resources.requests.cpu --
+# see vcpu_per_ifl below.
+vcpu_per_broker: 12
+vcpu_per_taskmanager: 8
+
+# --- Decoupled consolidation ratios (x86 vCPU per physical IFL) -------------
+# Kafka is I/O-bound: network and storage interrupts offload to System Assist
+# Processors, so it consolidates aggressively. Flink is CPU-bound and gets
+# SMT-2 compute parity only. The HA control plane sits between them.
+kafka_consolidation_ratio: 8.0
+flink_consolidation_ratio: 2.0
+overhead_consolidation_ratio: 4.0
+
+# --- Fixed platform overhead ------------------------------------------------
+# 44 x86 vCPU covers KRaft + Schema Registry + Control Center + CMF.
+# Schema Registry IS inside this number -- it is not an unbudgeted addition.
+control_plane_vcpu: 44
+control_plane_ram_gb: 64
+ocp_master_infra_ifls: 6
+ocp_worker_reservation_pct: 0.10
+os_ram_overhead_pct: 0.10
+
+# --- Memory per component ---------------------------------------------------
+broker_heap_gb: 16
+broker_page_cache_gb: 16          # PageCacheRatio 1.0 -> equal to heap
+taskmanager_heap_gb: 16
+
+# --- Connect: NOT modelled by z-stream-sizer --------------------------------
+# The sizer has no Connect tier at all. This is a locally-added estimate, and
+# it is called out separately in the report so nobody mistakes it for a sizer
+# output. Set connect_replicas: 0 to size a topology without Connect.
+connect_replicas: 2
+connect_cpu_logical_per_replica: 2    # logical (SMT-2) vCPU, i.e. pod requests
+connect_ram_gb_per_replica: 4
+
+# --- SMT-2 --------------------------------------------------------------
+# One IFL is one physical Z core; under SMT-2 it presents two hardware threads,
+# and Kubernetes schedules against those threads. This is the conversion
+# between "IFLs the LPAR owns" and "cpu: N in a pod spec".
+vcpu_per_ifl: 2
+
+# Set true to report demand without failing. Use when you WANT to see how far
+# over budget a proposed topology is.
+z_preflight_report_only: false

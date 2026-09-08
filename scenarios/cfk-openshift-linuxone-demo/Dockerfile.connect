@@ -1,0 +1,49 @@
+# =============================================================================
+# s390x Kafka Connect image -- CP 8.2.0 + MongoDB Kafka Connector
+# =============================================================================
+# Build ON an s390x host (or with buildx emulation -- see note at the bottom).
+#
+#   podman build --platform linux/s390x \
+#     -f Dockerfile.connect \
+#     -t <your-registry>/fsi-cp-connect-mongo:8.2.0-s390x .
+#   podman push <your-registry>/fsi-cp-connect-mongo:8.2.0-s390x
+#
+# Then set that tag as `connect.image.application` in values/connect.yaml.
+# =============================================================================
+
+# CP 8.2.0 is the FLOOR for s390x support -- earlier CP releases publish no
+# s390x artifacts whatsoever. The existing prod recipe in
+# scenarios/cfk-openshift/connectors/README.md pins cp-server-connect:7.6.0,
+# which CANNOT run on this platform. Do not copy that pin here.
+FROM confluentinc/cp-server-connect:8.2.0
+
+USER root
+
+# MongoDB Kafka Connector -- provides BOTH directions from one plugin:
+#   com.mongodb.kafka.connect.MongoSourceConnector  (change streams -> Kafka)
+#   com.mongodb.kafka.connect.MongoSinkConnector    (Kafka -> collection)
+#
+# Pure Java, so architecture-neutral. Pin the version rather than :latest so
+# the demo is reproducible.
+ARG MONGO_CONNECTOR_VERSION=1.16.0
+RUN confluent-hub install --no-prompt \
+      mongodb/kafka-connect-mongodb:${MONGO_CONNECTOR_VERSION}
+
+USER 1000
+
+# --- Verify the plugin actually loaded on s390x ------------------------------
+# An image manifest claiming s390x is necessary but not sufficient. After
+# pushing, confirm both connector classes are registered on a running worker:
+#
+#   oc exec -n confluent connect-0 -- \
+#     curl -s localhost:8083/connector-plugins | \
+#     grep -o 'com.mongodb.kafka.connect.Mongo[A-Za-z]*Connector'
+#
+# Expected output (both lines):
+#   com.mongodb.kafka.connect.MongoSinkConnector
+#   com.mongodb.kafka.connect.MongoSourceConnector
+#
+# NOTE ON CROSS-BUILDING: building this on an x86 workstation via
+# `--platform linux/s390x` runs confluent-hub under QEMU emulation. That works
+# but is slow, and it will not surface a native-library problem that only
+# appears on real hardware. Prefer building on an s390x node.

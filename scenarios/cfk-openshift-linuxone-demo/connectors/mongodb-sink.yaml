@@ -1,0 +1,48 @@
+---
+# =============================================================================
+# MongoDB Sink Connector -- DEMO (Kafka -> MongoDB collection)
+# =============================================================================
+# Reads the topic the Flink job writes, closing the round trip:
+#
+#   demo.customer (Mongo)
+#     -> [source connector] -> demo.customer.v1 (Kafka)
+#     -> [Flink SQL] -> demo.customer.enriched.v1 (Kafka)
+#     -> [this sink] -> demo.customer_enriched (Mongo)
+#
+# Sinking to a DIFFERENT collection than the source reads is deliberate --
+# writing back into demo.customer would feed the source's own change stream
+# and produce an infinite loop.
+# =============================================================================
+apiVersion: platform.confluent.io/v1beta1
+kind: Connector
+metadata:
+  name: demo-mongodb-sink-customer-enriched
+  namespace: confluent
+  labels:
+    app.kubernetes.io/part-of: fsi-linuxone-demo
+    fsi.io/connector-type: mongodb-sink
+spec:
+  class: com.mongodb.kafka.connect.MongoSinkConnector
+  taskMax: 2
+  connectClusterRef:
+    name: connect
+  configs:
+    connection.uri: "${file:/mnt/secrets/mongodb:connection_uri}"
+    database: "demo"
+    collection: "customer_enriched"
+
+    topics: "demo.customer.enriched.v1"
+
+    document.id.strategy: "com.mongodb.kafka.connect.sink.processor.id.strategy.KafkaMetaDataStrategy"
+    writemodel.strategy: "com.mongodb.kafka.connect.sink.writemodel.strategy.ReplaceOneDefaultStrategy"
+    delete.on.null.values: "true"
+    max.batch.size: "200"
+
+    key.converter: "org.apache.kafka.connect.storage.StringConverter"
+    value.converter: "io.confluent.connect.avro.AvroConverter"
+    value.converter.schema.registry.url: "http://schemaregistry.confluent.svc.cluster.local:8081"
+
+    errors.tolerance: "all"
+    errors.deadletterqueue.topic.name: "demo.dlq.mongodb-sink-customer-enriched"
+    errors.deadletterqueue.context.headers.enable: "true"
+    errors.log.enable: "true"

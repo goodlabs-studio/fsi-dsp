@@ -1,0 +1,179 @@
+# =============================================================================
+# CFK on OCP on LinuxONE (s390x) -- DEMO cluster: Kafka + KRaft + Schema Registry
+# =============================================================================
+# Demo-grade, NOT production-hardened. Deliberate omissions vs the prod
+# scenario (scenarios/cfk-openshift-linuxone/): no mTLS, no Vault-Agent
+# credential reconciliation, no RBAC rolebindings, no audit sink. Add those
+# from the accelerator layers before this touches regulated data.
+#
+# Sized from z-stream-sizer for the z16 BoM:
+#   3 brokers + 2 TaskManagers, 32 IFLs dedicated, 212 GB central storage.
+#
+# THE CPU NUMBERS BELOW ARE NOT THE SIZER'S vCPU NUMBERS. The sizer reports a
+# consolidated *x86-reference* footprint (12 vCPU/broker) which it divides by
+# the 8:1 Kafka consolidation ratio to reach physical IFLs. Kubernetes does not
+# schedule against x86-reference vCPU -- it schedules against the LOGICAL CPUs
+# the LPAR exposes, and under SMT-2 one IFL presents two of them:
+#
+#   Kafka tier: 36 x86 vCPU / 8:1 = 5 IFLs -> 5 x 2 = 10 logical vCPU
+#               10 logical vCPU / 3 brokers = 3.33 vCPU per broker pod
+#
+# Requesting cpu: 12 per broker here would overcommit the Kafka tier by ~3.6x
+# and the pods would sit Pending. See:
+#   wiki concepts/confluent-on-s390x-support-and-ifl-sizing.md ("IFLs vs vCPUs vs Pods")
+# =============================================================================
+
+kafka:
+  replicas: 3
+
+  image:
+    # CP 8.2.0 is the FLOOR for s390x -- earlier CP releases ship no s390x
+    # artifacts at all. Do not pin lower, including for a demo.
+    application: confluentinc/cp-server:8.2.0
+    init: confluentinc/confluent-init-container:2.11.0
+    pullPolicy: IfNotPresent
+
+  # --- Sized to the Kafka tier's 5 IFLs / 10 logical vCPU -------------------
+  # Request is the steady-state floor; limit gives burst headroom into the
+  # tier's spare thread capacity without letting one broker starve the others.
+  resources:
+    requests:
+      cpu: "3300m"
+      memory: "32Gi"   # 16 GB JVM heap + 16 GB page cache (PageCacheRatio 1.0)
+    limits:
+      cpu: "5000m"
+      memory: "32Gi"   # limit == request: page cache behaviour is why we sized it
+
+  # JVM heap is half the pod memory; the rest is deliberately left to the page
+  # cache, which is what actually serves Kafka reads.
+  configOverrides:
+    jvm:
+      - "-Xms16G"
+      - "-Xmx16G"
+
+  storage:
+    # 38.88 TB usable across the cluster (50 MB/s, 3d retention, RF 3).
+    # Per broker: 38.88 / 3 = 12.96 TB -> 13 Ti provisioned.
+    dataVolumeCapacity: 13Ti
+    # FICON-backed storage class. Confirm the name on the target cluster:
+    #   oc get storageclass
+    storageClassName: <PLACEHOLDER_FICON_STORAGE_CLASS>
+
+  podTemplate:
+    affinity:
+      nodeAffinity:
+        requiredDuringSchedulingIgnoredDuringExecution:
+          nodeSelectorTerms:
+            - matchExpressions:
+                - key: kubernetes.io/arch
+                  operator: In
+                  values:
+                    - s390x
+      # Spread brokers across nodes so a single LPAR/node loss cannot take
+      # the whole quorum. Demo-grade: preferred, not required, so a small
+      # cluster still schedules.
+      podAntiAffinity:
+        preferredDuringSchedulingIgnoredDuringExecution:
+          - weight: 100
+            podAffinityTerm:
+              topologyKey: kubernetes.io/hostname
+              labelSelector:
+                matchLabels:
+                  app: kafka
+    tolerations:
+      - key: "arch"
+        operator: "Equal"
+        value: "s390x"
+        effect: "NoSchedule"
+
+  # Demo posture: no TLS. FIPS is NOT available on the CP s390x build, and OCP
+  # FIPS must be set at install time -- neither is in scope for a demo.
+  tls:
+    enabled: false
+
+  metricReporter:
+    enabled: true
+
+---
+# --- KRaft controller quorum -------------------------------------------------
+# KRaft, not ZooKeeper. Three controllers for quorum; they are part of the
+# 11-IFL control-plane budget (KRaft + SR + C3 + CMF), not the Kafka tier.
+kRaftController:
+  replicas: 3
+
+  image:
+    application: confluentinc/cp-server:8.2.0
+    init: confluentinc/confluent-init-container:2.11.0
+    pullPolicy: IfNotPresent
+
+  resources:
+    requests:
+      cpu: "1000m"
+      memory: "4Gi"
+    limits:
+      cpu: "2000m"
+      memory: "4Gi"
+
+  storage:
+    dataVolumeCapacity: 20Gi
+    storageClassName: <PLACEHOLDER_FICON_STORAGE_CLASS>
+
+  podTemplate:
+    affinity:
+      nodeAffinity:
+        requiredDuringSchedulingIgnoredDuringExecution:
+          nodeSelectorTerms:
+            - matchExpressions:
+                - key: kubernetes.io/arch
+                  operator: In
+                  values:
+                    - s390x
+    tolerations:
+      - key: "arch"
+        operator: "Equal"
+        value: "s390x"
+        effect: "NoSchedule"
+
+---
+# --- Schema Registry ---------------------------------------------------------
+# SR is inside the 11-IFL / 64 GB control-plane budget alongside KRaft, C3 and
+# CMF -- it is not an unbudgeted addition. Single replica for the demo; three
+# for production.
+schemaregistry:
+  replicas: 1
+
+  image:
+    application: confluentinc/cp-schema-registry:8.2.0
+    init: confluentinc/confluent-init-container:2.11.0
+    pullPolicy: IfNotPresent
+
+  resources:
+    requests:
+      cpu: "1000m"
+      memory: "2Gi"
+    limits:
+      cpu: "2000m"
+      memory: "4Gi"
+
+  podTemplate:
+    affinity:
+      nodeAffinity:
+        requiredDuringSchedulingIgnoredDuringExecution:
+          nodeSelectorTerms:
+            - matchExpressions:
+                - key: kubernetes.io/arch
+                  operator: In
+                  values:
+                    - s390x
+    tolerations:
+      - key: "arch"
+        operator: "Equal"
+        value: "s390x"
+        effect: "NoSchedule"
+
+  tls:
+    enabled: false
+
+  dependencies:
+    kafka:
+      bootstrapEndpoint: kafka.confluent.svc.cluster.local:9071

@@ -1,0 +1,123 @@
+---
+# =============================================================================
+# z_lpar_preflight role -- IFL and central-storage budget gate
+# =============================================================================
+# Pure computation plus one assertion. No cluster calls, no mutations -- safe
+# in --check and safe to run before the OCP cluster even exists.
+#
+# Every variable is explicitly cast before use. Extra-vars supplied on the
+# command line (-e kafka_brokers=6) arrive as STRINGS, and an uncast string
+# in a division raises "unsupported operand type(s) for /: 'str' and 'int'"
+# rather than producing a wrong number -- but casting at the point of use is
+# what keeps the CLI override path working at all.
+# =============================================================================
+
+# --- Compute IFL demand, tier by tier ---------------------------------------
+# Each tier's x86-reference vCPU divided by its own consolidation ratio, then
+# rounded UP: you cannot buy four and a half engines.
+- name: Compute Kafka tier IFLs
+  ansible.builtin.set_fact:
+    _kafka_ifls: >-
+      {{ (((kafka_brokers | int) * (vcpu_per_broker | int))
+          / (kafka_consolidation_ratio | float))
+         | round(0, 'ceil') | int }}
+
+- name: Compute Flink tier IFLs
+  ansible.builtin.set_fact:
+    _flink_ifls: >-
+      {{ (((flink_taskmanagers | int) * (vcpu_per_taskmanager | int))
+          / (flink_consolidation_ratio | float))
+         | round(0, 'ceil') | int }}
+
+- name: Compute workload IFLs
+  ansible.builtin.set_fact:
+    _workload_ifls: "{{ (_kafka_ifls | int) + (_flink_ifls | int) }}"
+
+- name: Compute control-plane IFLs (KRaft + Schema Registry + C3 + CMF)
+  ansible.builtin.set_fact:
+    _control_plane_ifls: >-
+      {{ ((control_plane_vcpu | int) / (overhead_consolidation_ratio | float))
+         | round(0, 'ceil') | int }}
+
+# OCP tax: a static master/infra hit plus a kubelet/OS reservation taken as a
+# percentage of the WORKLOAD only (not of the control plane).
+- name: Compute OpenShift platform tax IFLs
+  ansible.builtin.set_fact:
+    _ocp_tax_ifls: >-
+      {{ (ocp_master_infra_ifls | int)
+         + (((_workload_ifls | int) * (ocp_worker_reservation_pct | float))
+            | round(0, 'ceil') | int) }}
+
+# Connect is converted from LOGICAL vCPU (what the pod requests) back to IFLs
+# by dividing by SMT-2 -- the opposite direction from the tiers above, because
+# Connect is sized directly in pod terms rather than in x86-reference vCPU.
+- name: Compute Connect IFLs (locally estimated -- not a z-stream-sizer output)
+  ansible.builtin.set_fact:
+    _connect_ifls: >-
+      {{ (((connect_replicas | int) * (connect_cpu_logical_per_replica | int))
+          / (vcpu_per_ifl | float))
+         | round(0, 'ceil') | int }}
+
+- name: Compute total IFL demand
+  ansible.builtin.set_fact:
+    _total_ifls: >-
+      {{ (_workload_ifls | int) + (_control_plane_ifls | int)
+         + (_ocp_tax_ifls | int) + (_connect_ifls | int) }}
+
+# --- Compute central-storage demand -----------------------------------------
+- name: Compute node RAM (brokers + TaskManagers)
+  ansible.builtin.set_fact:
+    _nodes_ram_gb: >-
+      {{ ((kafka_brokers | int)
+          * ((broker_heap_gb | int) + (broker_page_cache_gb | int)))
+         + ((flink_taskmanagers | int) * (taskmanager_heap_gb | int)) }}
+
+# OS overhead applies across the Confluent estate; the Connect estimate is
+# added afterwards so it stays visibly separable from the sizer's model.
+- name: Compute total central storage demand
+  ansible.builtin.set_fact:
+    _total_ram_gb: >-
+      {{ ((((_nodes_ram_gb | int) + (control_plane_ram_gb | int))
+           * (1 + (os_ram_overhead_pct | float))) | round(0, 'ceil') | int)
+         + ((connect_replicas | int) * (connect_ram_gb_per_replica | int)) }}
+
+# --- Report ------------------------------------------------------------------
+- name: Report LPAR budget vs demand
+  ansible.builtin.debug:
+    msg:
+      - "LPAR budget          : {{ lpar_ifl_budget }} IFLs, {{ lpar_ram_gb }} GB"
+      - "Topology             : {{ kafka_brokers }} brokers, {{ flink_taskmanagers }} TaskManagers, {{ connect_replicas }} Connect workers"
+      - "---- IFL demand ----"
+      - "  Kafka tier         : {{ _kafka_ifls }}"
+      - "  Flink tier         : {{ _flink_ifls }}"
+      - "  Control plane      : {{ _control_plane_ifls }}  (KRaft + Schema Registry + C3 + CMF)"
+      - "  OCP platform tax   : {{ _ocp_tax_ifls }}  ({{ ocp_master_infra_ifls }} static + {{ ((ocp_worker_reservation_pct | float) * 100) | int }}% of workload)"
+      - "  Connect (estimate) : {{ _connect_ifls }}  <-- NOT modelled by z-stream-sizer"
+      - "  TOTAL              : {{ _total_ifls }} / {{ lpar_ifl_budget }}"
+      - "---- Central storage ----"
+      - "  TOTAL              : {{ _total_ram_gb }} GB / {{ lpar_ram_gb }} GB"
+      - "---- Pod sizing (SMT-2: 1 IFL = {{ vcpu_per_ifl }} logical vCPU) ----"
+      - "  Per broker         : {{ (((_kafka_ifls | int) * (vcpu_per_ifl | int) / (kafka_brokers | int)) * 1000) | round(0) | int }}m cpu, {{ (broker_heap_gb | int) + (broker_page_cache_gb | int) }}Gi memory"
+      - "  Per TaskManager    : {{ ((_flink_ifls | int) * (vcpu_per_ifl | int) / (flink_taskmanagers | int)) | round(0) | int }} cpu, {{ taskmanager_heap_gb }}Gi memory"
+
+# --- Gate --------------------------------------------------------------------
+- name: Assert the topology fits the LPAR allocation
+  ansible.builtin.assert:
+    that:
+      - (_total_ifls | int) <= (lpar_ifl_budget | int)
+      - (_total_ram_gb | int) <= (lpar_ram_gb | int)
+    fail_msg: >-
+      TOPOLOGY DOES NOT FIT THE LPAR.
+      IFLs: need {{ _total_ifls }}, have {{ lpar_ifl_budget }}
+      (over by {{ (_total_ifls | int) - (lpar_ifl_budget | int) }}).
+      RAM: need {{ _total_ram_gb }} GB, have {{ lpar_ram_gb }} GB
+      (over by {{ (_total_ram_gb | int) - (lpar_ram_gb | int) }} GB).
+      Either reduce the topology or take a larger LPAR to the mainframe team.
+      Marginal cost from the 3-broker/2-TaskManager baseline is roughly
+      +1 IFL per broker and +4 IFLs per TaskManager.
+    success_msg: >-
+      Topology fits: {{ _total_ifls }}/{{ lpar_ifl_budget }} IFLs,
+      {{ _total_ram_gb }}/{{ lpar_ram_gb }} GB
+      ({{ (lpar_ifl_budget | int) - (_total_ifls | int) }} IFLs and
+      {{ (lpar_ram_gb | int) - (_total_ram_gb | int) }} GB spare).
+  when: not (z_preflight_report_only | bool)

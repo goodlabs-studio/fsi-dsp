@@ -1,0 +1,87 @@
+# =============================================================================
+# CFK on OCP on LinuxONE (s390x) -- DEMO Connect cluster (MongoDB source + sink)
+# =============================================================================
+# ONE Connect cluster for the demo. The production scenario splits Connect into
+# three clusters (connect / connect-lakehouse / connect-databases) so that a
+# replication-slot stall cannot back up the audit pipeline -- that isolation is
+# deliberate there and deliberately dropped here.
+#
+# ---------------------------------------------------------------------------
+# BUDGET WARNING: Connect is NOT in the 32-IFL BoM.
+# ---------------------------------------------------------------------------
+# z-stream-sizer models four control-plane components -- KRaft, Schema
+# Registry, Control Center, CMF -- and no Connect tier at all (verified: no
+# occurrence of "connect" in sizing.go or web/index.html). The 32 IFLs are
+# fully consumed by 3 brokers + 2 TaskManagers + control plane + OCP tax.
+#
+# This cluster therefore adds capacity ON TOP of the BoM:
+#
+#   2 workers x 2000m = 4 logical vCPU = 2 IFLs  (SMT-2)
+#   2 workers x 4 Gi  = 8 GB central storage
+#   => running total 34 IFLs / ~220 GB
+#
+# That 2-IFL figure is a demo-scale estimate, not a sizer output. Take it to
+# the mainframe team as an estimate. A production Connect tier carrying real
+# CDC volume is materially larger -- the prod scenario requests 1500m/3Gi and
+# bursts to 6000m/12Gi per worker.
+# =============================================================================
+
+connect:
+  name: connect
+  replicas: 2
+
+  image:
+    # Custom s390x image: CP 8.2.0 base + MongoDB Kafka Connector.
+    # Build recipe: ../Dockerfile.connect
+    #
+    # The MongoDB connector is pure Java, so it carries no s390x risk -- per
+    # the s390x support matrix, "connectors that rely on native OS libraries"
+    # are the unsupported class, and "pure-Java connectors (Mongo, Debezium)
+    # are unaffected."
+    application: <PLACEHOLDER_S390X_CONNECT_MONGO_IMAGE>
+    init: confluentinc/confluent-init-container:2.11.0
+    pullPolicy: IfNotPresent
+
+  resources:
+    requests:
+      cpu: "2000m"
+      memory: "4Gi"
+    limits:
+      cpu: "3000m"
+      memory: "6Gi"
+
+  podTemplate:
+    affinity:
+      nodeAffinity:
+        requiredDuringSchedulingIgnoredDuringExecution:
+          nodeSelectorTerms:
+            - matchExpressions:
+                - key: kubernetes.io/arch
+                  operator: In
+                  values:
+                    - s390x
+    tolerations:
+      - key: "arch"
+        operator: "Equal"
+        value: "s390x"
+        effect: "NoSchedule"
+
+  tls:
+    enabled: false
+
+  # Demo credential handling: a plain Kubernetes Secret, NOT Vault-Agent.
+  # Create it before deploying (see ../README.md step 4):
+  #   oc create secret generic mongodb-demo-creds -n confluent \
+  #     --from-literal=connection_uri='mongodb://<user>:<pass>@mongodb-demo.confluent.svc.cluster.local:27017/?replicaSet=rs0'
+  # The connector configs read it as ${file:/mnt/secrets/mongodb:connection_uri}.
+  mountedSecrets:
+    - secretRef: mongodb-demo-creds
+      keyItems:
+        - key: connection_uri
+          path: mongodb
+
+  dependencies:
+    kafka:
+      bootstrapEndpoint: kafka.confluent.svc.cluster.local:9071
+    schemaRegistry:
+      url: http://schemaregistry.confluent.svc.cluster.local:8081

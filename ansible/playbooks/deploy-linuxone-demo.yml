@@ -1,0 +1,162 @@
+---
+# =============================================================================
+# FSI Kafka Platform -- LinuxONE (s390x) DEMO cluster deployment
+# =============================================================================
+# Confluent Platform + CMF Flink + Kafka Connect (MongoDB source/sink) on
+# OpenShift on IBM z16, sized to a 32-IFL / 212 GB dedicated LPAR.
+#
+# DEMO-GRADE. No mTLS, no RBAC, no Vault, no audit sink, no FIPS. Do not point
+# this at regulated data -- layer accelerators/confluent-on-linuxone/ on top
+# first.
+#
+# Play order matters:
+#   0. Preflight  -- fail closed if the topology does not fit the LPAR
+#   1. CFK        -- operator + Kafka/KRaft/Schema Registry CRs
+#   2. Flink      -- FKO + CMF operators, then the session cluster
+#   3. MongoDB    -- StatefulSet + replica-set initiation (change streams!)
+#   4. Connect    -- Connect cluster, then the two Connector CRs
+#
+# Usage:
+#   ansible-playbook ansible/playbooks/deploy-linuxone-demo.yml \
+#     -i ansible/inventories/linuxone-demo/hosts.yml
+#
+#   # size-only, no cluster contact:
+#   ansible-playbook ansible/playbooks/deploy-linuxone-demo.yml \
+#     -i ansible/inventories/linuxone-demo/hosts.yml --tags preflight
+#
+#   # dry-run audit of everything:
+#   ansible-playbook ansible/playbooks/deploy-linuxone-demo.yml \
+#     -i ansible/inventories/linuxone-demo/hosts.yml --check
+# =============================================================================
+
+# --- Play 0: LPAR budget gate ------------------------------------------------
+# Runs first and independently of the cluster. Catches "you scaled brokers to
+# 6 on a 32-IFL LPAR" before anything is applied and pods start Pending.
+- name: Preflight LPAR IFL and central-storage budget
+  hosts: localhost
+  connection: local
+  gather_facts: false
+  tags:
+    - preflight
+    - always
+  tasks:
+    - name: Assert topology fits the LinuxONE LPAR
+      ansible.builtin.include_role:
+        name: z_lpar_preflight
+
+# --- Play 1: CFK operator + Kafka / KRaft / Schema Registry ------------------
+- name: Deploy CFK operator and Kafka platform
+  hosts: localhost
+  connection: local
+  gather_facts: false
+  tags:
+    - cfk
+  tasks:
+    - name: Deploy CFK operator and platform CRs
+      ansible.builtin.include_role:
+        name: cfk_operator
+
+# --- Play 2: Flink operators (FKO + CMF) ------------------------------------
+- name: Deploy FKO and CMF Flink operators
+  hosts: localhost
+  connection: local
+  gather_facts: false
+  tags:
+    - flink
+  tasks:
+    - name: Deploy FKO and CMF via Helm
+      ansible.builtin.include_role:
+        name: flink_operators
+
+    - name: Apply demo Flink session cluster
+      kubernetes.core.k8s:
+        state: present
+        namespace: "{{ demo_namespace }}"
+        src: "{{ demo_scenario_dir }}/flink/flink-session-cluster.yaml"
+        wait: true
+        wait_timeout: 600
+
+# --- Play 3: MongoDB + replica-set initiation --------------------------------
+# The replica set is not optional. MongoDB change streams -- the mechanism the
+# source connector uses -- are unavailable on a standalone mongod.
+- name: Deploy demo MongoDB and initiate the replica set
+  hosts: localhost
+  connection: local
+  gather_facts: false
+  tags:
+    - mongodb
+  tasks:
+    - name: Apply MongoDB StatefulSet, Service and rs-init Job
+      kubernetes.core.k8s:
+        state: present
+        namespace: "{{ demo_namespace }}"
+        src: "{{ demo_scenario_dir }}/mongodb/mongodb-demo.yaml"
+
+    - name: Wait for replica-set initiation Job to succeed
+      kubernetes.core.k8s_info:
+        kind: Job
+        name: mongodb-demo-rs-init
+        namespace: "{{ demo_namespace }}"
+      register: _rs_init
+      until: (_rs_init.resources[0].status.succeeded | default(0) | int) >= 1
+      retries: 40
+      delay: 15
+      changed_when: false
+
+# --- Play 4: Connect cluster + MongoDB connectors ---------------------------
+- name: Deploy Connect and the MongoDB source/sink connectors
+  hosts: localhost
+  connection: local
+  gather_facts: false
+  tags:
+    - connect
+  tasks:
+    - name: Apply demo topics (DLQ topics must exist before the connectors)
+      kubernetes.core.k8s:
+        state: present
+        namespace: "{{ demo_namespace }}"
+        src: "{{ demo_scenario_dir }}/topics/demo-topics.yaml"
+
+    # The Connect cluster must be Ready before Connector CRs are applied --
+    # CFK will accept a Connector CR against a non-existent cluster and leave
+    # it stuck without a useful error.
+    - name: Wait for Connect cluster to be Ready
+      kubernetes.core.k8s_info:
+        kind: Connect
+        api_version: platform.confluent.io/v1beta1
+        name: connect
+        namespace: "{{ demo_namespace }}"
+      register: _connect_ready
+      until: >-
+        (_connect_ready.resources | length) > 0 and
+        (_connect_ready.resources[0].status.readyReplicas | default(0) | int) >= 1
+      retries: 40
+      delay: 15
+      changed_when: false
+
+    - name: Apply MongoDB source and sink Connector CRs
+      kubernetes.core.k8s:
+        state: present
+        namespace: "{{ demo_namespace }}"
+        src: "{{ item }}"
+      loop:
+        - "{{ demo_scenario_dir }}/connectors/mongodb-source.yaml"
+        - "{{ demo_scenario_dir }}/connectors/mongodb-sink.yaml"
+
+    - name: Report connector status
+      kubernetes.core.k8s_info:
+        kind: Connector
+        api_version: platform.confluent.io/v1beta1
+        namespace: "{{ demo_namespace }}"
+        label_selectors:
+          - "app.kubernetes.io/part-of=fsi-linuxone-demo"
+      register: _connectors
+      changed_when: false
+
+    - name: Show connector states
+      ansible.builtin.debug:
+        msg: >-
+          {{ _connectors.resources
+             | map(attribute='metadata.name') | list }}
+          states={{ _connectors.resources
+             | map(attribute='status.state', default='unknown') | list }}

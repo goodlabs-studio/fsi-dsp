@@ -1,0 +1,78 @@
+---
+# =============================================================================
+# FlinkDeployment -- DEMO session cluster on LinuxONE (s390x)
+# =============================================================================
+# 2 TaskManagers, sized from the z-stream-sizer BoM's Flink tier.
+#
+# SIZING DERIVATION (why cpu: 8 and not the sizer's "8 vCPU per TaskManager"
+# by coincidence rather than by copying):
+#
+#   Flink tier: 2 TM x 8 x86-reference vCPU = 16 x86 vCPU
+#               16 / 2:1 Flink consolidation ratio = 8 IFLs
+#               8 IFLs x 2 (SMT-2) = 16 logical vCPU
+#               16 / 2 TaskManagers = 8 logical vCPU per TaskManager
+#
+# The 8 matches the x86 figure only because the Flink ratio (2:1) and SMT-2
+# (x2) cancel. Do not assume that holds for the Kafka tier -- it does not
+# (12 x86 vCPU/broker becomes 3.3 logical vCPU/broker at 8:1).
+#
+# Managed by FKO (deployed by ansible/roles/flink_operators). CMF manages the
+# FlinkEnvironment/CMFRestClass CRs; this is the plain FKO session cluster,
+# which is the simpler shape for a demo.
+# =============================================================================
+apiVersion: flink.apache.org/v1beta1
+kind: FlinkDeployment
+metadata:
+  name: demo-sql-session
+  namespace: confluent
+  labels:
+    app.kubernetes.io/component: flink-session
+    app.kubernetes.io/part-of: fsi-linuxone-demo
+spec:
+  # s390x Flink image. CP 8.2.0 is the floor for Confluent Platform for
+  # Apache Flink on s390x.
+  image: <PLACEHOLDER_S390X_FLINK_IMAGE>
+  flinkVersion: v1_20
+  serviceAccount: flink
+
+  flinkConfiguration:
+    # 8 logical vCPU per TaskManager / 4 slots = 2 vCPU per slot.
+    taskmanager.numberOfTaskSlots: "4"
+
+    state.backend: hashmap
+    state.checkpoints.dir: file:///flink-data/checkpoints
+    execution.checkpointing.interval: "60000"
+
+    metrics.reporter.prom.factory.class: org.apache.flink.metrics.prometheus.PrometheusReporterFactory
+    metrics.reporter.prom.port: "9249"
+
+  jobManager:
+    resource:
+      memory: "2048m"
+      cpu: 1
+
+  taskManager:
+    resource:
+      # 16 GB per TaskManager, per the BoM's TaskManagerRAMGB.
+      memory: "16384m"
+      cpu: 8
+    replicas: 2
+
+  mode: native
+
+  podTemplate:
+    spec:
+      affinity:
+        nodeAffinity:
+          requiredDuringSchedulingIgnoredDuringExecution:
+            nodeSelectorTerms:
+              - matchExpressions:
+                  - key: kubernetes.io/arch
+                    operator: In
+                    values:
+                      - s390x
+      tolerations:
+        - key: "arch"
+          operator: "Equal"
+          value: "s390x"
+          effect: "NoSchedule"

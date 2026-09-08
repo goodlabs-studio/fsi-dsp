@@ -1,0 +1,50 @@
+---
+# =============================================================================
+# LinuxONE demo -- group variables
+# =============================================================================
+# Sized from z-stream-sizer for IBM z16 (Telum), OCP topology, dedicated IFLs.
+# Verified against the engine: 3 brokers + 2 TaskManagers => 32 IFLs,
+# 212 GB central storage, 38.88 TB usable (50 MB/s, 3d retention, RF 3).
+# =============================================================================
+
+demo_namespace: confluent
+demo_scenario_dir: "{{ playbook_dir }}/../../scenarios/cfk-openshift-linuxone-demo"
+
+# --- LPAR allocation --------------------------------------------------------
+# NOT the BoM figure. The BoM is 32 IFLs / 212 GB, and that is exactly
+# consumed by 3 brokers + 2 TaskManagers + control plane + OCP tax, with zero
+# spare. Adding the Connect tier this demo requires pushes it to 34 / 220.
+#
+# This is a DOCUMENTED widening of the budget, not a quiet one:
+#   32 IFLs  + 2 for Connect (2 workers x 2 logical vCPU / SMT-2) = 34
+#   212 GB   + 8 for Connect (2 workers x 4 GB)                   = 220
+#
+# Take 34 IFLs / 220 GB to the mainframe team as the revised ask. To see the
+# gate reject the un-widened BoM instead, run with:
+#   -e lpar_ifl_budget=32 -e lpar_ram_gb=212
+# To size without Connect at all, set connect_replicas: 0 and the original
+# 32 / 212 passes exactly.
+lpar_ifl_budget: 34
+lpar_ram_gb: 220
+
+# --- Topology ---------------------------------------------------------------
+kafka_brokers: 3
+flink_taskmanagers: 2
+connect_replicas: 2
+
+# --- Storage ----------------------------------------------------------------
+# 38.88 TB usable = 50 MB/s x 86400 s x 3 days x RF 3. Independent of broker
+# count -- growing to 9 brokers does not change the FICON allocation.
+storage_fabric: ficon
+aggregate_ingest_mbs: 50
+retention_days: 3
+replication_factor: 3
+
+# --- Image pins -------------------------------------------------------------
+# CP 8.2.0 is the FLOOR for s390x. Earlier CP releases ship no s390x
+# artifacts. FKO/CMF versions match ansible/roles/flink_operators defaults.
+cp_version: "8.2.0"
+cfk_init_container_version: "2.11.0"
+fko_helm_chart_version: "1.14.0"
+cmf_helm_chart_version: "2.3.0"
+flink_namespace: confluent
