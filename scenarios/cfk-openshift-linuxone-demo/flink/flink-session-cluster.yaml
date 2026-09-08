@@ -19,6 +19,24 @@
 # Managed by FKO (deployed by ansible/roles/flink_operators). CMF manages the
 # FlinkEnvironment/CMFRestClass CRs; this is the plain FKO session cluster,
 # which is the simpler shape for a demo.
+#
+# ---------------------------------------------------------------------------
+# THIS CLUSTER RUNS NO JOB. That is intentional, not an omission.
+# ---------------------------------------------------------------------------
+# The Flink RUNTIME is part of this scenario -- 2 TaskManagers and 8 of the
+# 32 IFLs are allocated to it in the BoM, and it comes up idle and ready.
+# The Flink SQL that would use it belongs to the fraud detection demo, which
+# submits its own jobs (FlinkSessionJob CRs, or the SQL client) against this
+# session cluster.
+#
+# Consequence for THIS scenario's data path: the MongoDB sink reads
+# demo.customer.v1 directly rather than a Flink output topic, so the CDC round
+# trip works standalone. See connectors/mongodb-sink.yaml.
+#
+# An idle session cluster still consumes its 8 IFLs -- Autopilot-style
+# scale-to-zero is a Confluent Cloud behaviour, not an FKO one. If the fraud
+# demo is far off and you need the engines back, drop taskManager.replicas
+# and re-run the preflight to confirm the new totals.
 # =============================================================================
 apiVersion: flink.apache.org/v1beta1
 kind: FlinkDeployment

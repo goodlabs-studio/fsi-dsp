@@ -2,16 +2,26 @@
 # =============================================================================
 # MongoDB Sink Connector -- DEMO (Kafka -> MongoDB collection)
 # =============================================================================
-# Reads the topic the Flink job writes, closing the round trip:
+# Closes the round trip with NO Flink in the path:
 #
 #   demo.customer (Mongo)
 #     -> [source connector] -> demo.customer.v1 (Kafka)
-#     -> [Flink SQL] -> demo.customer.enriched.v1 (Kafka)
-#     -> [this sink] -> demo.customer_enriched (Mongo)
+#     -> [this sink]        -> demo.customer_enriched (Mongo)
 #
-# Sinking to a DIFFERENT collection than the source reads is deliberate --
-# writing back into demo.customer would feed the source's own change stream
-# and produce an infinite loop.
+# Flink SQL is deliberately absent. The FlinkDeployment session cluster IS
+# deployed by this scenario -- it is in the 32-IFL BoM at 2 TaskManagers /
+# 8 IFLs -- but it runs no job here. Stream processing belongs to the fraud
+# detection demo, which lands its own SQL on this cluster. Keeping the sink
+# pointed at demo.customer.v1 means this scenario demonstrates an end-to-end
+# CDC path on its own, rather than sitting idle waiting for a job that another
+# demo owns.
+#
+# If the fraud demo later inserts a Flink hop, repoint `topics` below at
+# whatever topic that job produces.
+#
+# Sinking to a DIFFERENT collection than the source reads is deliberate and
+# still load-bearing here -- writing back into demo.customer would feed the
+# source's own change stream and produce an infinite loop.
 # =============================================================================
 apiVersion: platform.confluent.io/v1beta1
 kind: Connector
@@ -31,7 +41,7 @@ spec:
     database: "demo"
     collection: "customer_enriched"
 
-    topics: "demo.customer.enriched.v1"
+    topics: "demo.customer.v1"
 
     document.id.strategy: "com.mongodb.kafka.connect.sink.processor.id.strategy.KafkaMetaDataStrategy"
     writemodel.strategy: "com.mongodb.kafka.connect.sink.writemodel.strategy.ReplaceOneDefaultStrategy"

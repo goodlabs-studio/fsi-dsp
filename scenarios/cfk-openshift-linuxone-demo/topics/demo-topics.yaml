@@ -14,6 +14,11 @@
 # DLQ topics are NOT auto-created by Connect. They are declared here because
 # both connectors reference them; without these the first bad record kills
 # the task instead of being diverted.
+#
+# There is no demo.customer.enriched.v1 here. That topic would be the output
+# of a Flink job, and stream processing belongs to the fraud detection demo,
+# not this scenario -- the sink reads demo.customer.v1 directly. The fraud
+# demo declares its own topics when it lands on this cluster.
 # =============================================================================
 apiVersion: platform.confluent.io/v1beta1
 kind: KafkaTopic
@@ -29,23 +34,6 @@ spec:
   configs:
     min.insync.replicas: "2"
     retention.ms: "259200000"   # 3 days, matching the BoM retention
-    cleanup.policy: "delete"
-
----
-apiVersion: platform.confluent.io/v1beta1
-kind: KafkaTopic
-metadata:
-  name: demo-customer-enriched-v1
-  namespace: confluent
-  labels:
-    app.kubernetes.io/part-of: fsi-linuxone-demo
-spec:
-  name: demo.customer.enriched.v1
-  replicas: 3
-  partitionCount: 6
-  configs:
-    min.insync.replicas: "2"
-    retention.ms: "259200000"
     cleanup.policy: "delete"
 
 ---

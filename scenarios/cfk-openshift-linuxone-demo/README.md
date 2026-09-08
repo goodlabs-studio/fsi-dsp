@@ -169,11 +169,24 @@ ansible-playbook ../../ansible/playbooks/deploy-linuxone-demo.yml \
 ## Demo flow
 
 ```
-demo.customer (MongoDB)
+demo.customer (MongoDB, other team's instance)
   --[MongoSourceConnector, change streams]--> demo.customer.v1 (Kafka)
-  --[Flink SQL on the session cluster]------> demo.customer.enriched.v1
   --[MongoSinkConnector]--------------------> demo.customer_enriched (MongoDB)
 ```
+
+**No Flink in the data path, deliberately.** The Flink session cluster *is*
+deployed here — it is in the BoM at 2 TaskManagers / 8 IFLs — but it comes up
+idle. Stream processing belongs to the **fraud detection demo**, which submits
+its own SQL against this cluster. Pointing the sink at `demo.customer.v1`
+directly means this scenario demonstrates a complete CDC round trip on its own
+instead of waiting on a job another demo owns. When the fraud demo adds a
+Flink hop, repoint `topics` in `connectors/mongodb-sink.yaml` at whatever that
+job produces.
+
+Note an idle session cluster still holds its 8 IFLs — scale-to-zero is a
+Confluent Cloud behaviour, not an FKO one. If the fraud demo is far off and
+you want those engines back, drop `taskManager.replicas` and re-run
+`--tags preflight` to confirm the new totals.
 
 The sink writes to a **different collection** than the source reads on
 purpose. Sinking back into `demo.customer` would feed the source's own change
