@@ -9,11 +9,15 @@
 # this at regulated data -- layer accelerators/confluent-on-linuxone/ on top
 # first.
 #
+# SCOPE: this deploys the CONFLUENT side only. MongoDB is provisioned and
+# owned by a different team; nothing here stands it up. Play 3 verifies their
+# handover satisfies the connector's contract, and stops if it does not.
+#
 # Play order matters:
 #   0. Preflight  -- fail closed if the topology does not fit the LPAR
 #   1. CFK        -- operator + Kafka/KRaft/Schema Registry CRs
 #   2. Flink      -- FKO + CMF operators, then the session cluster
-#   3. MongoDB    -- StatefulSet + replica-set initiation (change streams!)
+#   3. MongoDB    -- VERIFY the other team's instance (replica set required)
 #   4. Connect    -- Connect cluster, then the two Connector CRs
 #
 # Usage:
@@ -76,32 +80,87 @@
         wait: true
         wait_timeout: 600
 
-# --- Play 3: MongoDB + replica-set initiation --------------------------------
-# The replica set is not optional. MongoDB change streams -- the mechanism the
-# source connector uses -- are unavailable on a standalone mongod.
-- name: Deploy demo MongoDB and initiate the replica set
+# --- Play 3: verify the MongoDB the other team provides ----------------------
+# MongoDB is stood up and owned by a DIFFERENT TEAM. Nothing here provisions
+# it -- this play only verifies that what they handed over satisfies the
+# contract the source connector depends on, and fails with a message naming
+# whose problem it is.
+#
+# The check that matters: change streams REQUIRE a replica set. A standalone
+# mongod deploys clean and then fails at RUNTIME with
+# "The $changeStream stage is only supported on replica sets" -- after the
+# whole platform is up and someone is watching a demo. Catch it here instead.
+- name: Verify the MongoDB dependency provided by the MongoDB team
   hosts: localhost
   connection: local
   gather_facts: false
   tags:
     - mongodb
+    - preflight
   tasks:
-    - name: Apply MongoDB StatefulSet, Service and rs-init Job
-      kubernetes.core.k8s:
-        state: present
-        namespace: "{{ demo_namespace }}"
-        src: "{{ demo_scenario_dir }}/mongodb/mongodb-demo.yaml"
-
-    - name: Wait for replica-set initiation Job to succeed
+    - name: Look up the MongoDB connection secret
       kubernetes.core.k8s_info:
-        kind: Job
-        name: mongodb-demo-rs-init
+        kind: Secret
+        name: "{{ mongo_secret_name }}"
         namespace: "{{ demo_namespace }}"
-      register: _rs_init
-      until: (_rs_init.resources[0].status.succeeded | default(0) | int) >= 1
-      retries: 40
-      delay: 15
+      register: _mongo_secret
       changed_when: false
+
+    - name: Assert the MongoDB connection secret exists
+      ansible.builtin.assert:
+        that:
+          - (_mongo_secret.resources | length) > 0
+        fail_msg: >-
+          Secret '{{ mongo_secret_name }}' not found in namespace
+          '{{ demo_namespace }}'. The MongoDB team owns provisioning; you own
+          creating this secret from the connection string they provide:
+            oc create secret generic {{ mongo_secret_name }} -n {{ demo_namespace }} \
+              --from-literal=connection_uri='mongodb://<user>:<pass>@<host>:27017/?replicaSet=<rs>'
+        success_msg: "Secret '{{ mongo_secret_name }}' present."
+
+    - name: Decode the connection URI
+      ansible.builtin.set_fact:
+        _mongo_uri: >-
+          {{ _mongo_secret.resources[0].data.connection_uri | b64decode }}
+      no_log: true
+
+    # Contract check, not a live probe: a URI without replicaSet= means the
+    # MongoDB team handed over a standalone, and change streams will not work.
+    - name: Assert the connection URI targets a replica set
+      ansible.builtin.assert:
+        that:
+          - "'replicaSet=' in _mongo_uri"
+        fail_msg: >-
+          The connection URI in '{{ mongo_secret_name }}' has no replicaSet=
+          parameter, which means it points at a standalone mongod. MongoDB
+          change streams -- which the source connector requires -- are only
+          available on a replica set. This is a DEPENDENCY GAP to raise with
+          the MongoDB team: ask them to initiate a replica set (even a
+          single-member one) and reissue the connection string. Everything
+          would otherwise deploy cleanly and fail at first change-stream read.
+        success_msg: "Connection URI targets a replica set."
+
+    # Best-effort TCP reachability. Only meaningful when the Ansible controller
+    # sits on a network that can reach MongoDB; skip it when running from a
+    # workstation outside the frame.
+    - name: Check MongoDB is reachable from this controller
+      ansible.builtin.wait_for:
+        host: "{{ mongo_host }}"
+        port: "{{ mongo_port }}"
+        timeout: 10
+      register: _mongo_reach
+      failed_when: false
+      changed_when: false
+      when: mongo_reachability_check | bool
+
+    - name: Report MongoDB reachability
+      ansible.builtin.debug:
+        msg: >-
+          {{ mongo_host }}:{{ mongo_port }} —
+          {{ 'reachable' if (_mongo_reach.state | default('')) == 'started'
+             else 'NOT reachable from this controller (may still be reachable
+             from the Connect pods; verify in-cluster if the connector fails)' }}
+      when: mongo_reachability_check | bool
 
 # --- Play 4: Connect cluster + MongoDB connectors ---------------------------
 - name: Deploy Connect and the MongoDB source/sink connectors

@@ -54,6 +54,31 @@ aggregate_ingest_mbs: 50
 retention_days: 3
 replication_factor: 3
 
+# --- MongoDB: EXTERNAL DEPENDENCY, owned by another team ---------------------
+# Nothing in this repo provisions MongoDB. The MongoDB team stands it up on
+# LinuxONE (supported on s390x under the MongoDB/IBM OEM agreement) and hands
+# over a connection string. Our side owns only the Secret and the connectors.
+#
+# Create the Secret from what they give you:
+#   oc create secret generic mongodb-demo-creds -n confluent \
+#     --from-literal=connection_uri='mongodb://<user>:<pass>@<host>:27017/?replicaSet=<rs>'
+#
+# THE CONTRACT WITH THAT TEAM -- confirm all four before demo day:
+#   1. It is a REPLICA SET, not a standalone. Change streams do not exist on a
+#      standalone mongod, and that failure only surfaces at first read.
+#   2. The connection URI includes replicaSet=<name>.
+#   3. Database 'demo' with collection 'customer' exists and is writable, and
+#      collection 'customer_enriched' is free for the sink to own.
+#   4. The credentials carry changeStream/read on demo.customer and write on
+#      demo.customer_enriched.
+mongo_secret_name: mongodb-demo-creds
+mongo_host: <PLACEHOLDER_MONGODB_HOST>
+mongo_port: 27017
+# The TCP probe only means anything if this Ansible controller shares a
+# network with MongoDB. Set false when running from a workstation outside
+# the frame -- the Connect pods may still reach it fine.
+mongo_reachability_check: true
+
 # --- Image pins -------------------------------------------------------------
 # CP 8.2.0 is the FLOOR for s390x. Earlier CP releases ship no s390x
 # artifacts. FKO/CMF versions match ansible/roles/flink_operators defaults.

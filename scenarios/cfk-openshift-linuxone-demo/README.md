@@ -11,6 +11,11 @@ dedicated-IFL z16 LPAR.
 > `accelerators/confluent-on-linuxone/` Kustomize layers. Do not point this at
 > regulated data.
 
+> **Scope: the Confluent side only.** MongoDB is provisioned and owned by a
+> separate team. Nothing here stands it up — this scenario owns the Kafka /
+> Flink / Connect estate and the two Connector CRs that talk to their
+> instance. See [The MongoDB dependency](#the-mongodb-dependency).
+
 ## Bill of materials
 
 | Dimension | Value |
@@ -121,25 +126,14 @@ Check these **before** starting, not after a failure.
    artifacts at all. Note that `scenarios/cfk-openshift/connectors/README.md`
    pins `cp-server-connect:7.6.0` for the x86 path — that image **cannot run
    here**. Use `Dockerfile.connect` in this directory.
-3. **MongoDB OEM image for s390x.** MongoDB *is* supported on LinuxONE under
-   the MongoDB/IBM OEM agreement. What does not exist is a **community** s390x
-   manifest — `docker.io/library/mongo` is x86/arm only, because the Z build
-   is distributed through IBM rather than the public registry. Pull the OEM
-   image from the IBM-provided registry or your internal mirror and substitute
-   it for `<PLACEHOLDER_IBM_OEM_MONGODB_S390X_IMAGE>` in
-   `mongodb/mongodb-demo.yaml` (two places: the StatefulSet and the rs-init
-   Job). The pod is pinned to s390x so the operational store runs in-frame
-   beside Confluent, which is the point of an L1 demo. Do **not** substitute
-   the community tag under QEMU emulation; the ~10× throughput penalty makes
-   change-stream latency meaningless.
-   The connector side needs nothing special — the MongoDB Kafka Connector is
-   pure Java, and per the support matrix only "connectors that rely on native
-   OS libraries" are excluded on s390x.
-
-   Note the MongoDB pod is **not** inside the 32-IFL Confluent BoM —
-   `z-stream-sizer` models the Confluent estate only. On the L1 reference
-   architecture the operational stores get their own LPAR; on a shared LPAR
-   its 500m/2Gi competes with Confluent. Confirm which applies.
+3. **MongoDB handover.** Owned by another team — see
+   [The MongoDB dependency](#the-mongodb-dependency) for the four-point
+   contract. Create the Secret from the connection string they provide:
+   ```bash
+   oc create secret generic mongodb-demo-creds -n confluent \
+     --from-literal=connection_uri='mongodb://<user>:<pass>@<host>:27017/?replicaSet=<rs>'
+   ```
+   `--tags mongodb` verifies it before anything depends on it.
 4. **FICON storage class.** `oc get storageclass` — substitute the real name
    for `<PLACEHOLDER_FICON_STORAGE_CLASS>` in `values/kafka.yaml`.
 5. **Ansible collections.** `ansible-galaxy collection install kubernetes.core`
@@ -152,11 +146,15 @@ Check these **before** starting, not after a failure.
 ansible-playbook ../../ansible/playbooks/deploy-linuxone-demo.yml \
   -i ../../ansible/inventories/linuxone-demo/hosts.yml --tags preflight
 
-# 1. Secrets (demo-grade: plain Secrets, not Vault)
+# 1. Namespace + the MongoDB connection secret, from the string the
+#    MongoDB team provides (demo-grade: plain Secret, not Vault)
 oc create namespace confluent || true
-oc create secret generic mongodb-demo-root -n confluent \
-  --from-literal=username=demo \
-  --from-literal=password="$(openssl rand -base64 24)"
+oc create secret generic mongodb-demo-creds -n confluent \
+  --from-literal=connection_uri='mongodb://<user>:<pass>@<host>:27017/?replicaSet=<rs>'
+
+# 1b. Verify their handover before building anything on it
+ansible-playbook ../../ansible/playbooks/deploy-linuxone-demo.yml \
+  -i ../../ansible/inventories/linuxone-demo/hosts.yml --tags mongodb
 
 # 2. Build and push the s390x Connect image, then set the tag in
 #    values/connect.yaml
@@ -166,13 +164,6 @@ podman build --platform linux/s390x -f Dockerfile.connect \
 # 3. Full deploy
 ansible-playbook ../../ansible/playbooks/deploy-linuxone-demo.yml \
   -i ../../ansible/inventories/linuxone-demo/hosts.yml
-```
-
-Then create the Connect-facing Mongo secret once the root password is known:
-
-```bash
-oc create secret generic mongodb-demo-creds -n confluent \
-  --from-literal=connection_uri="mongodb://demo:<pass>@mongodb-demo-0.mongodb-demo.confluent.svc.cluster.local:27017/?replicaSet=rs0"
 ```
 
 ## Demo flow
@@ -188,14 +179,55 @@ The sink writes to a **different collection** than the source reads on
 purpose. Sinking back into `demo.customer` would feed the source's own change
 stream and loop forever.
 
-Drive it by inserting into Mongo and watching the round trip:
+Drive it by inserting into `demo.customer` on the MongoDB team's instance —
+from wherever you normally reach it — and watching the round trip land:
+
+```javascript
+// against their mongosh / client
+db.getSiblingDB("demo").customer.insertOne({ name: "acme", tier: "gold" })
+```
 
 ```bash
-oc exec -n confluent mongodb-demo-0 -- mongosh --quiet \
-  -u demo -p '<pass>' --authenticationDatabase admin \
-  "mongodb://localhost:27017/?replicaSet=rs0" \
-  --eval 'db.getSiblingDB("demo").customer.insertOne({name:"acme", tier:"gold"})'
+# watch it arrive on the Kafka side
+oc exec -n confluent kafka-0 -- kafka-console-consumer \
+  --bootstrap-server localhost:9071 \
+  --topic demo.customer.v1 --from-beginning --max-messages 5
 ```
+
+## The MongoDB dependency
+
+**MongoDB is stood up and owned by another team.** Nothing in this scenario
+provisions it, and no MongoDB manifests ship here — only the two Connector CRs
+that read from and write to their instance.
+
+For the record: MongoDB *is* supported on LinuxONE under the MongoDB/IBM OEM
+agreement, so it can run in-frame beside Confluent. There is no *community*
+s390x manifest (`docker.io/library/mongo` is x86/arm only) because the Z build
+is distributed through IBM — but that is the MongoDB team's problem to solve,
+not a constraint on this scenario.
+
+### The contract — confirm all four before demo day
+
+1. **It is a replica set, not a standalone.** MongoDB change streams — the
+   mechanism the source connector uses — do not exist on a standalone
+   `mongod`. This is the one that bites: everything deploys cleanly and then
+   fails at the first change-stream read with
+   `The $changeStream stage is only supported on replica sets`.
+2. **The connection URI carries `replicaSet=<name>`.**
+3. **Database `demo`, collection `customer`** exists and is writable, and
+   **`customer_enriched` is free** for the sink to own.
+4. **Credentials** grant change-stream/read on `demo.customer` and write on
+   `demo.customer_enriched`.
+
+Points 1 and 2 are asserted automatically — `--tags mongodb` decodes the
+Secret and fails with a message naming the gap. Points 3 and 4 are a
+conversation, not a check.
+
+### Sizing note
+
+The MongoDB pods are **outside** the 32-IFL BoM — `z-stream-sizer` models the
+Confluent estate only. Whether they share this LPAR or get their own is the
+MongoDB team's capacity question, not a charge against these 32 IFLs.
 
 ## Verify
 
@@ -223,7 +255,6 @@ oc get pods -n confluent -o wide
 | `values/connect.yaml` | Single demo Connect cluster with the budget warning |
 | `flink/flink-session-cluster.yaml` | FKO session cluster, 2 TaskManagers |
 | `connectors/mongodb-{source,sink}.yaml` | Demo-grade Connector CRs |
-| `mongodb/mongodb-demo.yaml` | MongoDB StatefulSet + replica-set initiation Job |
 | `topics/demo-topics.yaml` | KafkaTopic CRs including both DLQs |
 | `Dockerfile.connect` | s390x Connect image, CP 8.2.0 + Mongo connector |
 
