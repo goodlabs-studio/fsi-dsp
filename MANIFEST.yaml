@@ -1,7 +1,7 @@
 # MANIFEST.yaml v1 — Stable contract between fsi-dsp and cflt-ai
 # Every asset in this file has a stable ID that MUST NOT be removed
 # without a major version bump. See CNTR-04 CI enforcement.
-version: "1.2.0"
+version: "1.3.0"
 schema: "fsi-dsp/manifest/v1"
 
 capabilities:
@@ -511,6 +511,13 @@ capabilities:
     name: "cp-rhel-linuxone"
     path: "scenarios/cp-rhel-linuxone"
     description: "Confluent Platform on RHEL deployment scenario targeting IBM LinuxONE / s390x with IBM Semeru JDK + FIPS + JCEKS keystore overrides. Lakehouse playbooks per ADR-011."
+
+  # ── Scenarios (1 — mainframe integration) ──
+  - id: "scenario/mq-quickstart"
+    type: scenario
+    name: "mq-quickstart"
+    path: "scenarios/mq-quickstart"
+    description: "Kafka Connect on Z (zIIP) with the IBM MQ source/sink connectors in bindings mode, automated on ibm.ibm_zos_core: one inputs file, an SSH preflight, and a build-time lint for the original quickstart's defects. RACF (STARTED profile, key ring) and PROCLIB jobs are generated and staged, never submitted. Confluent's certified 8.1.0 z/OS build; at-least-once (z/OS MQ source 12.1.1). The LinuxONE/client-mode path is ADR-009."
 
   # ── References (1 — new from ADR-012) ──
   - id: "reference/cockroachdb"

@@ -51,6 +51,15 @@ See [ADR-012](docs/adr/012-database-connector-patterns.md),
 [CockroachDB Integration Guide](docs/cockroachdb-integration-guide.md), and
 [PostgreSQL Integration Guide](docs/postgres-integration-guide.md).
 
+### Mainframe integration: IBM MQ on z/OS (`scenarios/mq-quickstart/`)
+
+Kafka Connect on Z: the worker runs as a z/OS started task, dispatched on zIIP,
+next to the queue manager, so the IBM MQ source and sink connectors use
+bindings mode (cross-memory, no channel). An Ansible playbook on
+`ibm.ibm_zos_core` with one inputs file and a preflight. RACF and PROCLIB jobs
+are generated and staged for the security team and systems programmer, never
+submitted. The LinuxONE / client-mode path is [ADR-009](docs/adr/009-linuxone-kafka-offload.md).
+
 ## Accelerators
 
 Where `scenarios/` are starter kits, `accelerators/` are opinionated, end-to-end, production-grade deployments.
@@ -210,6 +219,7 @@ scenarios/
   private-cloud/             # Confluent Private Cloud (Terraform)
   cp-rhel-linuxone/          # CP on RHEL on LinuxONE s390x (Ansible)
   cfk-openshift-linuxone/    # CFK on OpenShift on LinuxONE s390x (Helm)
+  mq-quickstart/             # Kafka Connect on Z + IBM MQ bindings mode (Ansible, ibm_zos_core)
 modules/
   topic/                     # Shared governance module (topic + schema + RBAC + DR)
   flink/                     # CC Flink compute pool module
