@@ -1,0 +1,122 @@
+---
+# =============================================================================
+# mq-quickstart inputs -- THE one file to fill in
+# =============================================================================
+# Copy to inputs.yml (gitignored). Secrets go in an Ansible Vault file:
+#   ansible-vault create vault.yml
+#     vault_kafka_api_key: ...
+#     vault_kafka_api_secret: ...
+#     vault_confluent_license: ...     # premium z/OS connectors need a subscription
+#
+# Every <PLACEHOLDER_...> must be replaced; the build play refuses to run
+# while one is left.
+# =============================================================================
+
+# --- Downloads on the controller (not in this repo) ---------------------------
+# Confluent's certified build and connectors, per the Connect on z/OS page:
+#   https://packages.confluent.io/archive/8.1/confluent-connect-8.1.0-zOS.tar.gz
+#   Marketplace: confluentinc/kafka-connect-ibmmq-zos (12.1.1)
+#                confluentinc/kafka-connect-ibmmq-zos-sink (2.1.2)
+connect_tarball: <PLACEHOLDER_PATH>/confluent-connect-8.1.0-zOS.tar.gz
+# Top directory inside the tarball. preflight.sh checks it, so a mismatch
+# fails on the controller rather than on z/OS.
+connect_tarball_topdir: confluent-connect-zos
+mq_source_connector_zip: <PLACEHOLDER_PATH>/confluentinc-kafka-connect-ibmmq-zos-12.1.1.zip
+# Empty string = no sink. Set the zip path to install and register the sink.
+mq_sink_connector_zip: ""
+
+# --- z/OS UNIX layout -------------------------------------------------------------
+# Owned by stc_user. Keep it short: the PROC's PARM (bash path + start script
+# path) must stay within 100 characters, and the build lint enforces that.
+connect_base_dir: /u/kafconn
+zos_java_home: /usr/lpp/java/J17.0_64
+# IBM Open Enterprise Foundation for z/OS bash.
+zos_bash_path: /usr/lpp/IBM/foz/v1r1/bin/bash
+# Xms = Xmx. The guide sized the user for a 2 GB+ heap.
+connect_heap: 2g
+
+# --- Started task -------------------------------------------------------------------
+stc_name: KAFCONN
+# The z/OS UNIX user Ansible connects as (inventory ansible_user). It becomes
+# the started task's identity through RACFSTC.
+stc_user: KAFUSER
+stc_group: KAFGRP
+# Your own HLQ: the playbook allocates <stage_hlq>.<stc_name>.CNTL there.
+stage_hlq: KAFUSER
+# Where the systems programmer copies the PROC (PROCCOPY job).
+target_proclib: USER.PROCLIB
+job_accounting: (ACCT)
+job_class: A
+job_msgclass: X
+
+# --- IBM MQ: EXTERNAL DEPENDENCY, owned by the MQ team ------------------------------
+# THE CONTRACT WITH THAT TEAM. Confirm all four before the start run:
+#   1. The queue manager runs on THIS z/OS image. Bindings mode is
+#      cross-memory, so it cannot reach a queue manager on another LPAR.
+#   2. The source queue exists, and stc_user may GET from it (and PUT to the
+#      sink queue, if the sink is enabled).
+#   3. mq_hlq is the high-level qualifier of SCSQAUTH and SCSQANLE.
+#   4. mq_install_path/java/lib holds the bindings library (libmqjbnd) and
+#      every jar in mq_client_jars.
+mq_queue_manager: <PLACEHOLDER_QMGR>
+mq_install_path: /usr/lpp/mqm/V9R4M0
+mq_hlq: MQM.V9R4M0
+# Symlinked into each connector's lib/. Confluent asks for allclient only. The
+# guide saw ClassNotFoundException on MQ 9.2+ and added com.ibm.mqjms.jar and
+# com.ibm.mq.jmqi.jar; append them here if the health check reports it.
+mq_client_jars:
+  - com.ibm.mq.allclient.jar
+mq_source_queue: <PLACEHOLDER_SOURCE_QUEUE>
+mq_sink_queue: ""
+
+# --- Kafka: Confluent Cloud --------------------------------------------------------
+kafka_bootstrap: <PLACEHOLDER_CLUSTER>.confluent.cloud:9092
+kafka_api_key: "{{ vault_kafka_api_key }}"
+kafka_api_secret: "{{ vault_kafka_api_secret }}"
+confluent_license: "{{ vault_confluent_license | default('') }}"
+# Names the Connect cluster and its three internal topics (-configs, -offsets, -status).
+connect_group_id: zos-connect-kafconn
+# Topic names follow fsi-dsp naming: {domain}.{application}.{version}.{entity}
+mq_source_topic: <PLACEHOLDER_DOMAIN>.mq-bridge.v1.<PLACEHOLDER_ENTITY>
+mq_sink_topic: ""
+mq_source_connector_name: mq-zos-source-<PLACEHOLDER_ENTITY>
+mq_sink_connector_name: mq-zos-sink-<PLACEHOLDER_ENTITY>
+# The guide's converters. FSI canon is Avro or Protobuf with Schema Registry in
+# production; switching needs the converter jars and SR settings as well.
+connect_key_converter: org.apache.kafka.connect.storage.StringConverter
+connect_value_converter: org.apache.kafka.connect.storage.StringConverter
+
+# --- Connect REST API ---------------------------------------------------------------
+# Set explicitly through listeners=. 8083 is the Apache default; the guide's
+# 8082 came from rest.port, which has been ignored since Kafka 3.0.
+connect_rest_port: 8083
+# The z/OS host name other workers and this controller use to reach the API.
+connect_rest_host: <PLACEHOLDER_ZOS_HOSTNAME>
+
+# --- TLS trust for Confluent Cloud ----------------------------------------------------
+# racf_keyring: trust via a RACF key ring (the guide's choice; RACFRING job).
+# jvm_default:  the JVM's cacerts, no RACF job.
+tls_truststore: racf_keyring
+racf_keyring: KAFCONN.RING
+racf_ca_label: ISRG Root X1
+# PEM of the CA that signs the cluster certificate. Staged to
+# <stage_hlq>.<stc_name>.CACERT for RACDCERT ADD.
+racf_ca_pem: <PLACEHOLDER_PATH>/isrgrootx1.pem
+# true when the security team already holds this CA in RACF: RACFRING then
+# connects it to the ring without adding it.
+racf_ca_already_defined: false
+
+# --- Encoding -----------------------------------------------------------------------------
+# Confluent's z/OS page converts .properties to IBM-1047. Stock Java reads
+# properties as ISO-8859-1. If the worker logs "Missing required configuration"
+# at start, set ISO8859-1 and re-run install.
+connect_props_encoding: IBM-1047
+zos_expected_codeset: IBM-1047
+
+# --- Preflight ----------------------------------------------------------------------------
+# The guide sized the USS user at about 5 GB.
+preflight_min_free_kb: 5242880
+# Preflight requires an online zIIP (D M=CPU via ZOAU opercmd). If this user
+# has no console authority, the sysprog confirms zIIP and you set true; the
+# report then says the check was asserted, not observed.
+preflight_ziip_confirmed: false

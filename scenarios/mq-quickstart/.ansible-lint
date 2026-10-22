@@ -1,0 +1,16 @@
+# Same baseline as fsi-dsp ansible/.ansible-lint (shared profile + FQCN),
+# scoped to this scenario.
+profile: shared
+
+enable_list:
+  - fqcn
+
+exclude_paths:
+  - collections/
+  - out/
+  - tests/
+  - .cache/
+
+var_naming_pattern: "^[a-z_][a-z0-9_]*$"
+
+offline: true

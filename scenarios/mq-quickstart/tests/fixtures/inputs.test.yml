@@ -1,0 +1,55 @@
+---
+# Test inputs: inputs.example.yml with every placeholder filled by a fake but
+# realistic value. Archive paths are overridden by the test with -e.
+connect_tarball: OVERRIDDEN_BY_TEST
+connect_tarball_topdir: confluent-connect-zos
+mq_source_connector_zip: OVERRIDDEN_BY_TEST
+mq_sink_connector_zip: ""
+
+connect_base_dir: /u/kafconn
+zos_java_home: /usr/lpp/java/J17.0_64
+zos_bash_path: /usr/lpp/IBM/foz/v1r1/bin/bash
+connect_heap: 2g
+
+stc_name: KAFCONN
+stc_user: KAFUSER
+stc_group: KAFGRP
+stage_hlq: KAFUSER
+target_proclib: USER.PROCLIB
+job_accounting: (ACCT)
+job_class: A
+job_msgclass: X
+
+mq_queue_manager: QM01
+mq_install_path: /usr/lpp/mqm/V9R4M0
+mq_hlq: MQM.V9R4M0
+mq_client_jars:
+  - com.ibm.mq.allclient.jar
+mq_source_queue: PAYMENTS.TXN.OUT
+mq_sink_queue: PAYMENTS.TXN.IN
+
+kafka_bootstrap: pkc-test1.us-east-1.aws.confluent.cloud:9092
+kafka_api_key: TESTKEY
+kafka_api_secret: TESTSECRET
+confluent_license: ""
+connect_group_id: zos-connect-kafconn
+mq_source_topic: payments.mq-bridge.v1.transaction
+mq_sink_topic: payments.mq-bridge.v1.settlement
+mq_source_connector_name: mq-zos-source-transaction
+mq_sink_connector_name: mq-zos-sink-settlement
+connect_key_converter: org.apache.kafka.connect.storage.StringConverter
+connect_value_converter: org.apache.kafka.connect.storage.StringConverter
+
+connect_rest_port: 8083
+connect_rest_host: zos-test.example.com
+
+tls_truststore: racf_keyring
+racf_keyring: KAFCONN.RING
+racf_ca_label: ISRG Root X1
+racf_ca_pem: /dev/null
+racf_ca_already_defined: false
+
+connect_props_encoding: IBM-1047
+zos_expected_codeset: IBM-1047
+preflight_min_free_kb: 5242880
+preflight_ziip_confirmed: false

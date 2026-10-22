@@ -1,0 +1,155 @@
+---
+# =============================================================================
+# Install -- Connect on Z into z/OS UNIX (runs on the z/OS host)
+# =============================================================================
+# Encoding rules, per file:
+#   bundle (jars, share/, scripts)    binary transfer, extracted untagged
+#   bin/connect-distributed.sh,
+#   bin/kafka-run-class.sh            IBM-1047 (Confluent Connect on z/OS)
+#   connect-distributed.properties    connect_props_encoding (IBM-1047 per Confluent)
+#   connect.env (STDENV)              IBM-1047: BPXBATCH ends records at X'15'
+#   start-connect.sh                  IBM-1047, read by z/OS bash
+#   connect-log4j2.yaml               ISO8859-1: read as bytes by log4j2 in the JVM
+# =============================================================================
+
+- name: Create the z/OS UNIX layout
+  ansible.builtin.file:
+    path: "{{ item }}"
+    state: directory
+    mode: "0750"
+  loop:
+    - "{{ connect_base_dir }}"
+    - "{{ connect_config_dir }}"
+    - "{{ connect_bin_dir }}"
+    - "{{ connect_logs_dir }}"
+    - "{{ connect_stage_dir }}"
+
+- name: Fingerprint the bundle built on the controller
+  ansible.builtin.stat:
+    path: "{{ bundle_path }}"
+    checksum_algorithm: sha256
+  register: _bundle
+  delegate_to: localhost
+  vars:
+    ansible_python_interpreter: "{{ ansible_playbook_python }}"
+
+- name: Name the remote bundle after its checksum
+  ansible.builtin.set_fact:
+    _bundle_id: "{{ _bundle.stat.checksum[:12] }}"
+    _bundle_remote: "{{ connect_stage_dir }}/connect-zos-bundle-{{ _bundle.stat.checksum[:12] }}.tar"
+    _bundle_marker: "{{ connect_stage_dir }}/.installed-{{ _bundle.stat.checksum[:12] }}"
+
+- name: Transfer the bundle in binary (no conversion of jars)
+  ibm.ibm_zos_core.zos_copy:
+    src: "{{ bundle_path }}"
+    dest: "{{ _bundle_remote }}"
+    binary: true
+    replace: false
+
+- name: Check whether this bundle is already installed
+  ansible.builtin.stat:
+    path: "{{ _bundle_marker }}"
+  register: _installed
+
+- name: Extract and convert a new bundle
+  when: not _installed.stat.exists
+  block:
+    # The playbook environment sets FILETAG(AUTOTAG), which would tag the
+    # extracted ASCII files as IBM-1047. Extract without it, then clear any
+    # tag so the jars stay plain binary.
+    - name: Extract the bundle untagged
+      ansible.builtin.shell:
+        cmd: |
+          set -e
+          _CEE_RUNOPTS='POSIX(ON)' tar -xf {{ _bundle_remote | quote }}
+          chtag -R -r {{ connect_tarball_topdir | quote }} plugins
+        chdir: "{{ connect_base_dir }}"
+      changed_when: true
+
+    - name: Convert the launcher scripts to IBM-1047 (Confluent Connect on z/OS, step 2)
+      ibm.ibm_zos_core.zos_encode:
+        src: "{{ connect_home }}/{{ item }}"
+        encoding:
+          from: ISO8859-1
+          to: IBM-1047
+      loop: "{{ connect_scripts_to_convert }}"
+
+- name: Read the launcher script tags
+  ansible.builtin.command:
+    cmd: ls -T {{ (connect_home ~ '/' ~ item) | quote }}
+  loop: "{{ connect_scripts_to_convert }}"
+  register: _tags
+  changed_when: false
+
+- name: Assert the launcher scripts are tagged IBM-1047 text
+  ansible.builtin.assert:
+    that:
+      - "'IBM-1047' in item.stdout"
+      - "'T=on' in item.stdout"
+    fail_msg: "{{ item.item }} is not tagged IBM-1047 text: {{ item.stdout }}"
+    quiet: true
+  loop: "{{ _tags.results }}"
+  loop_control:
+    label: "{{ item.item }}"
+
+- name: Mark this bundle installed
+  ansible.builtin.file:
+    path: "{{ _bundle_marker }}"
+    state: touch
+    mode: "0640"
+  when: not _installed.stat.exists
+
+# --- MQ client jars: symlinks, never CLASSPATH ------------------------------------
+# Confluent wants com.ibm.mq.allclient.jar in the connector's lib/; IBM does not
+# support copying MQ jars away from the install. A symlink satisfies both and
+# keeps the jar in step with MQ maintenance and the native bindings library.
+# Connect's PluginUtils follows symlinks in plugin.path.
+- name: Find the connector plugin directories
+  ansible.builtin.find:
+    paths: "{{ connect_plugins_dir }}"
+    file_type: directory
+    recurse: false
+  register: _plugins
+
+- name: Assert at least one connector plugin was installed
+  ansible.builtin.assert:
+    that:
+      - _plugins.files | length > 0
+    fail_msg: "No connector plugins under {{ connect_plugins_dir }}"
+
+- name: Link the z/OS MQ client jars into each connector lib/
+  ansible.builtin.file:
+    src: "{{ mq_install_path }}/java/lib/{{ item.1 }}"
+    dest: "{{ item.0 }}/lib/{{ item.1 }}"
+    state: link
+  loop: "{{ _plugins.files | map(attribute='path') | product(mq_client_jars) | list }}"
+
+# --- Generated configuration ------------------------------------------------------
+- name: Upload the generated configuration with per-file encoding
+  ibm.ibm_zos_core.zos_copy:
+    src: "{{ out_dir }}/rendered/{{ item.name }}"
+    dest: "{{ item.dest }}"
+    encoding:
+      from: UTF-8
+      to: "{{ item.encoding }}"
+    mode: "{{ item.mode }}"
+    replace: true
+  loop:
+    - name: connect-distributed.properties
+      dest: "{{ connect_config_dir }}/connect-distributed.properties"
+      encoding: "{{ connect_props_encoding }}"
+      mode: "0600"
+    - name: connect.env
+      dest: "{{ stdenv_path }}"
+      encoding: IBM-1047
+      mode: "0640"
+    - name: start-connect.sh
+      dest: "{{ start_script_path }}"
+      encoding: IBM-1047
+      mode: "0750"
+    - name: connect-log4j2.yaml
+      dest: "{{ connect_config_dir }}/connect-log4j2.yaml"
+      encoding: ISO8859-1
+      mode: "0640"
+  loop_control:
+    label: "{{ item.name }} -> {{ item.encoding }}"

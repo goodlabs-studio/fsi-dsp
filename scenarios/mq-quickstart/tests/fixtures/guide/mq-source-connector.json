@@ -1,0 +1,14 @@
+{
+  "name": "my-mq-source-connector-01",
+  "config": {
+    "connector.class": "io.confluent.connect.ibm.mq.IbmMQSourceConnector",
+    "tasks.max": "1",
+    "kafka.topic": "YOUR_KAFKA_DESTINATION_TOPIC",
+    "mq.queue.manager": "YOUR_QMGR_NAME",
+    "mq.transport.type": "bindings",
+    "jms.destination.name": "YOUR_MQ_SOURCE_QUEUE_NAME",
+    "jms.destination.type": "queue",
+    "key.converter": "org.apache.kafka.connect.storage.StringConverter",
+    "value.converter": "org.apache.kafka.connect.storage.StringConverter"
+  }
+}

@@ -1,0 +1,10 @@
+# Rendered per site; carries the Kafka API secret.
+out/
+# ansible-galaxy collection install -p ./collections
+collections/
+# Site copies of the .example files.
+inputs.yml
+inventory.yml
+vault.yml
+.pytest_cache/
+__pycache__/

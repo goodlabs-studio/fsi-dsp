@@ -1,0 +1,37 @@
+//RACFRING JOB {{ job_accounting }},'{{ stc_name }} RACF RING',
+//             CLASS={{ job_class }},MSGCLASS={{ job_msgclass }},NOTIFY=&SYSUID
+//*-------------------------------------------------------------------
+//* GATED: FOR THE SECURITY TEAM TO REVIEW AND SUBMIT. ANSIBLE STAGES
+//* THIS JOB AND NEVER SUBMITS IT.
+//*
+//* TRUST FOR THE CONFLUENT CLOUD TLS CHAIN THROUGH A RACF KEY RING
+//* OWNED BY {{ stc_user }}. THE JVM READS IT AS
+//* SAFKEYRINGJCE://{{ stc_user | upper }}/{{ racf_keyring }} (JCERACFKS).
+//*
+{% if racf_ca_stage_needed | bool %}
+//* RACDCERT ADD READS A CATALOGED VB SEQUENTIAL DATA SET; THE PLAYBOOK
+//* STAGED THE PEM AS {{ stage_cacert }}. THE LABEL GOES IN
+//* WITHLABEL; ADD() TAKES THE DATA SET, AND THERE IS NO DSN() KEYWORD.
+{% else %}
+//* THE CA '{{ racf_ca_label }}' IS ALREADY DEFINED IN RACF, SO NO ADD.
+{% endif %}
+//* READING ONE'S OWN RING NEEDS READ ON IRR.DIGTCERT.LISTRING IN
+//* FACILITY (OR AN RDATALIB PROFILE). REFRESHES APPLY IF RACLISTED.
+//*-------------------------------------------------------------------
+//TSO      EXEC PGM=IKJEFT1B
+//SYSTSPRT DD SYSOUT=*
+//SYSTSIN  DD *
+{% if racf_ca_stage_needed | bool %}
+  RACDCERT CERTAUTH ADD('{{ stage_cacert }}') -
+    WITHLABEL('{{ racf_ca_label }}') TRUST
+{% endif %}
+  RACDCERT ADDRING({{ racf_keyring }}) ID({{ stc_user }})
+  RACDCERT ID({{ stc_user }}) CONNECT(CERTAUTH -
+    LABEL('{{ racf_ca_label }}') RING({{ racf_keyring }}) -
+    USAGE(CERTAUTH))
+  PERMIT IRR.DIGTCERT.LISTRING CLASS(FACILITY) -
+    ID({{ stc_user }}) ACCESS(READ)
+  SETROPTS RACLIST(FACILITY) REFRESH
+  SETROPTS RACLIST(DIGTCERT, DIGTRING) REFRESH
+  RACDCERT ID({{ stc_user }}) LISTRING({{ racf_keyring }})
+/*

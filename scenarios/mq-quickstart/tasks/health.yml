@@ -1,0 +1,74 @@
+---
+# =============================================================================
+# Health -- connector and task state, plus log signatures (z/OS host)
+# =============================================================================
+# STDOUT/STDERR go to z/OS UNIX files (see the PROC), so "scan the spool"
+# becomes "scan those files". STDOUT carries WARN and above (log4j2 config),
+# STDERR anything the JVM or start script writes before logging starts.
+# =============================================================================
+
+- name: Read each connector's status
+  ansible.builtin.uri:
+    url: "{{ connect_rest_url }}/connectors/{{ item.name }}/status"
+    return_content: true
+    status_code:
+      - 200
+      - 404
+  loop: "{{ mq_connectors }}"
+  loop_control:
+    label: "{{ item.name }}"
+  register: _status
+  delegate_to: localhost
+  vars:
+    ansible_python_interpreter: "{{ ansible_playbook_python }}"
+
+- name: Report connector state
+  ansible.builtin.debug:
+    msg: >-
+      {{ item.item.name }}: connector={{ item.json.connector.state | default('NOT FOUND') }}
+      tasks={{ item.json.tasks | default([]) | map(attribute='state') | list }}
+  loop: "{{ _status.results }}"
+  loop_control:
+    label: "{{ item.item.name }}"
+
+- name: Read the tail of the task's STDOUT and STDERR files
+  ansible.builtin.command:
+    cmd: tail -n 400 {{ item | quote }}
+  loop:
+    - "{{ stdout_path }}"
+    - "{{ stderr_path }}"
+  register: _logs
+  changed_when: false
+  failed_when: false
+
+- name: Collect the log text
+  ansible.builtin.set_fact:
+    _log_text: "{{ _logs.results | map(attribute='stdout', default='') | join('\n') }}"
+    _unreadable_logs: "{{ _logs.results | rejectattr('rc', 'equalto', 0) | map(attribute='item') | list }}"
+
+- name: Match known failure signatures
+  ansible.builtin.set_fact:
+    _log_hits: "{{ _log_hits | default([]) + [item.hint ~ '  [' ~ (_log_text | regex_search(item.pattern)) ~ ']'] }}"
+  loop: "{{ health_log_patterns }}"
+  loop_control:
+    label: "{{ item.pattern }}"
+  when: _log_text is search(item.pattern)
+
+- name: Report log findings
+  ansible.builtin.debug:
+    msg:
+      log_signatures: "{{ _log_hits | default([]) }}"
+      unreadable_logs: "{{ _unreadable_logs }}"
+
+- name: Fail unless every connector and task is RUNNING and no signature matched
+  vars:
+    _bodies: "{{ _status.results | map(attribute='json', default={}) | list }}"
+    _tasks: "{{ _bodies | map(attribute='tasks', default=[]) | flatten }}"
+  ansible.builtin.assert:
+    that:
+      - _bodies | map(attribute='connector', default={}) | map(attribute='state', default='') | reject('equalto', 'RUNNING') | list | length == 0
+      - _tasks | length > 0
+      - _tasks | map(attribute='state') | reject('equalto', 'RUNNING') | list | length == 0
+      - _log_hits | default([]) | length == 0
+    fail_msg: "Unhealthy: see the reports above. Each log signature names its usual cause."
+    success_msg: "All connectors and tasks RUNNING; no failure signatures in the last 400 log lines."

@@ -1,0 +1,90 @@
+---
+# =============================================================================
+# Start -- read-only gate checks, S <stc>, wait for the REST API (z/OS host)
+# =============================================================================
+# The gate checks name the team that owns the fix, because the person running
+# this playbook usually cannot fix it.
+# =============================================================================
+
+- name: List the target PROCLIB
+  ansible.builtin.command:
+    cmd: mls {{ target_proclib | quote }}
+  register: _mls
+  changed_when: false
+  failed_when: false
+
+- name: Assert the PROC is in the PROCLIB (sysprog gate)
+  ansible.builtin.assert:
+    that:
+      - _mls.rc == 0
+      - _mls.stdout is search('(^|[\s(])' ~ stc_name ~ '([\s)]|$)', multiline=True)
+    fail_msg: >-
+      SYSPROG gate not done: {{ stc_name }} is not in {{ target_proclib }}
+      (mls rc={{ _mls.rc }}). The systems programmer submits
+      {{ stage_cntl }}(PROCCOPY).
+    success_msg: "{{ stc_name }} found in {{ target_proclib }}"
+
+- name: List the STARTED profile
+  ibm.ibm_zos_core.zos_tso_command:
+    commands:
+      - "RLIST STARTED {{ stc_name }}.* STDATA NORACF"
+  register: _rlist
+  failed_when: false
+  when: verify_racf | default(true) | bool
+
+# RLIST needs authority to the profile. If the installer has none, the check
+# cannot pass; -e verify_racf=false skips it, and the run says so.
+- name: Assert the STARTED profile assigns the started task's user (security gate)
+  ansible.builtin.assert:
+    that:
+      - _rlist.output[0].rc | default(1) == 0
+      - stc_user in (_rlist.output[0].stdout | default(''))
+    fail_msg: >-
+      SECURITY gate not verified: RLIST STARTED {{ stc_name }}.* did not show
+      USER {{ stc_user }}. Either the security team has not submitted
+      {{ stage_cntl }}(RACFSTC), or this user cannot list the profile. Confirm
+      with them, then re-run with -e verify_racf=false to skip this check.
+  when: verify_racf | default(true) | bool
+
+- name: Say the RACF check was skipped
+  ansible.builtin.debug:
+    msg: "SKIPPED: STARTED profile not verified (verify_racf=false). Relying on the security team's confirmation."
+  when: not (verify_racf | default(true) | bool)
+
+- name: Look for a running instance
+  ibm.ibm_zos_core.zos_job_query:
+    job_name: "{{ stc_name }}"
+  register: _running
+  failed_when: false
+
+- name: Start the task
+  ibm.ibm_zos_core.zos_operator:
+    cmd: "S {{ stc_name }}"
+    wait_time: 10
+  register: _start
+  changed_when: true
+  when: >-
+    _running.jobs | default([]) | selectattr('asid', 'defined')
+    | selectattr('asid', 'gt', 0) | list | length == 0
+
+# IEF695I ... USER ++++++++ means no STARTED profile matched: the task runs
+# without an identity and BPXBATCH fails for want of an OMVS segment.
+- name: Assert the start command was accepted
+  ansible.builtin.assert:
+    that:
+      - _start.stdout is not search('IEFC612I|IEF612I|NOT FOUND|JCL ERROR|\+\+\+\+\+\+\+\+')
+    fail_msg: "S {{ stc_name }} was rejected: {{ _start.stdout_lines | default([]) }}"
+    success_msg: "S {{ stc_name }} accepted"
+  when: _start is not skipped
+
+- name: Wait for the Connect REST API
+  ansible.builtin.uri:
+    url: "{{ connect_rest_url }}/"
+    status_code: 200
+  register: _rest
+  until: _rest.status == 200
+  retries: 30
+  delay: 10
+  delegate_to: localhost
+  vars:
+    ansible_python_interpreter: "{{ ansible_playbook_python }}"

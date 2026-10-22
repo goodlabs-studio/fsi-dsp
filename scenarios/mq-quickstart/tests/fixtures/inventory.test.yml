@@ -1,0 +1,19 @@
+---
+# Test inventory: same shape as inventory.example.yml with fake values. Only
+# the build play runs against it (on the controller), so nothing connects.
+all:
+  children:
+    zos_connect:
+      hosts:
+        zos-test:
+          ansible_host: zos-test.example.com
+          ansible_user: KAFUSER
+          ansible_port: 22
+      vars:
+        zos_pyz: /usr/lpp/IBM/cyp/v3r12/pyz
+        zos_zoau: /usr/lpp/IBM/zoautil
+        # A z/OS path that does not exist on the controller: if a delegated
+        # build task used it, the render test would fail.
+        ansible_python_interpreter: "{{ zos_pyz }}/bin/python3"
+        zos_environment:
+          _BPXK_AUTOCVT: "ON"

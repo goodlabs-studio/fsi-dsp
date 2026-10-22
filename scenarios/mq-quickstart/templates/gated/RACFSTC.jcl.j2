@@ -1,0 +1,23 @@
+//RACFSTC  JOB {{ job_accounting }},'{{ stc_name }} RACF STC',
+//             CLASS={{ job_class }},MSGCLASS={{ job_msgclass }},NOTIFY=&SYSUID
+//*-------------------------------------------------------------------
+//* GATED: FOR THE SECURITY TEAM TO REVIEW AND SUBMIT. ANSIBLE STAGES
+//* THIS JOB AND NEVER SUBMITS IT.
+//*
+//* GIVES STARTED TASK {{ stc_name }} THE IDENTITY {{ stc_user }}/{{ stc_group }}.
+//* {{ stc_user }} MUST ALREADY EXIST WITH AN OMVS SEGMENT: IT IS THE Z/OS
+//* UNIX USER THE PLAYBOOK INSTALLED AS. LISTUSER SHOWS IT FIRST.
+//* A GENERIC PROFILE NEEDS SETROPTS GENERIC(STARTED) ACTIVE.
+//*
+//* IKJEFT1B ENDS THE STEP AT THE FIRST NON-ZERO COMMAND RC, SO AN
+//* EXISTING PROFILE STOPS THE JOB FOR A HUMAN TO LOOK AT.
+//*-------------------------------------------------------------------
+//TSO      EXEC PGM=IKJEFT1B
+//SYSTSPRT DD SYSOUT=*
+//SYSTSIN  DD *
+  LISTUSER {{ stc_user }} OMVS NORACF
+  RDEFINE STARTED {{ stc_name }}.* UACC(NONE) -
+    STDATA(USER({{ stc_user }}) GROUP({{ stc_group }}) TRUSTED(NO))
+  SETROPTS RACLIST(STARTED) REFRESH
+  RLIST STARTED {{ stc_name }}.* STDATA NORACF
+/*

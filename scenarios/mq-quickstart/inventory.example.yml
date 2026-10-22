@@ -1,0 +1,39 @@
+---
+# =============================================================================
+# mq-quickstart inventory -- copy to inventory.yml (gitignored) and edit
+# =============================================================================
+# One host per z/OS image that runs a Connect worker. Workers on several
+# LPARs join the same Connect cluster through connect_group_id.
+#
+# ansible_user is the started task's own z/OS UNIX user (stc_user in
+# inputs.yml). It must already exist with an OMVS segment, a home directory
+# and SSH/SFTP access: the guide's "USS user account" prerequisite.
+# =============================================================================
+all:
+  children:
+    zos_connect:
+      hosts:
+        zos-lpar1:
+          ansible_host: <PLACEHOLDER_ZOS_HOSTNAME>
+          ansible_user: KAFUSER
+          ansible_port: 22
+      vars:
+        # IBM Open Enterprise SDK for Python and ZOAU install paths on z/OS.
+        zos_pyz: /usr/lpp/IBM/cyp/v3r12/pyz
+        zos_zoau: /usr/lpp/IBM/zoautil
+        ansible_python_interpreter: "{{ zos_pyz }}/bin/python3"
+        # The environment ibm.ibm_zos_core documents for every z/OS task
+        # (docs/source/configuration.rst; z_ansible_collections_samples).
+        # PYTHONPATH must match the Python minor version above.
+        zos_environment:
+          _BPXK_AUTOCVT: "ON"
+          ZOAU_HOME: "{{ zos_zoau }}"
+          PYTHONPATH: "{{ zos_zoau }}/lib/3.12"
+          LIBPATH: "{{ zos_zoau }}/lib:{{ zos_pyz }}/lib:/lib:/usr/lib:."
+          PATH: "{{ zos_zoau }}/bin:{{ zos_pyz }}/bin:/bin:/var/bin"
+          _CEE_RUNOPTS: "FILETAG(AUTOCVT,AUTOTAG) POSIX(ON)"
+          _TAG_REDIR_ERR: "txt"
+          _TAG_REDIR_IN: "txt"
+          _TAG_REDIR_OUT: "txt"
+          LANG: "C"
+          PYTHONSTDINENCODING: "cp1047"

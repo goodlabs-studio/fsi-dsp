@@ -1,0 +1,19 @@
+//PROCCOPY JOB {{ job_accounting }},'{{ stc_name }} PROCLIB',
+//             CLASS={{ job_class }},MSGCLASS={{ job_msgclass }},NOTIFY=&SYSUID
+//*-------------------------------------------------------------------
+//* GATED: FOR THE SYSTEMS PROGRAMMER TO REVIEW AND SUBMIT. ANSIBLE
+//* STAGES THIS JOB AND NEVER SUBMITS IT.
+//*
+//* COPIES THE GENERATED PROC {{ stage_cntl }}({{ stc_name }})
+//* INTO {{ target_proclib }}, REPLACING ANY EXISTING MEMBER. REVIEW
+//* THE STAGED MEMBER FIRST; IT IS THE SAME TEXT AS
+//* OUT/<HOST>/JCL/{{ stc_name }}.JCL ON THE ANSIBLE CONTROLLER.
+//*-------------------------------------------------------------------
+//COPY     EXEC PGM=IEBCOPY
+//SYSPRINT DD SYSOUT=*
+//STAGED   DD DISP=SHR,DSN={{ stage_cntl }}
+//PROCLIB  DD DISP=SHR,DSN={{ target_proclib }}
+//SYSIN    DD *
+  COPY OUTDD=PROCLIB,INDD=STAGED
+  SELECT MEMBER=(({{ stc_name }},,R))
+/*

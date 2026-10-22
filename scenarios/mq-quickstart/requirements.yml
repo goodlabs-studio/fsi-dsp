@@ -1,0 +1,9 @@
+---
+# ibm.ibm_zos_core 2.1.x: ansible-core >= 2.16 on the controller; z/OS V2R5-V3Rx,
+# ZOAU >= 1.4.1 < 1.5 and IBM Open Enterprise SDK for Python 3.12+ on the target
+# (collection-requirements.rst at v2.1.0). The tasks use 2.x option names
+# (binary, replace), so 1.x will not work.
+#   ansible-galaxy collection install -r requirements.yml -p ./collections
+collections:
+  - name: ibm.ibm_zos_core
+    version: ">=2.1.0,<2.2.0"

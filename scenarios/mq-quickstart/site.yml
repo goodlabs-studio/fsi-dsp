@@ -1,0 +1,221 @@
+---
+# =============================================================================
+# mq-quickstart -- Kafka Connect on Z (zIIP) with IBM MQ in bindings mode
+# =============================================================================
+# Automates the "Connect on Z Quickstart" (reference/*.pdf) on the
+# ibm.ibm_zos_core collection: one inputs file, one run up to the approval
+# gates, one run after them. Nothing that needs another team's authority is
+# executed: RACF and PROCLIB jobs are generated, staged and left for them.
+#
+# Play order:
+#   0. preflight  -- controller + z/OS prerequisites over plain SSH (always)
+#   1. build      -- repack the tarball, render every file, lint it (local)
+#   2. install    -- binary transfer, extract, IBM-1047 conversion, config
+#   3. stage      -- PROC + gated jobs + CA cert into the installer's HLQ
+#   4. start      -- verify the gates, S <stc>, wait for the REST API
+#   5. register   -- PUT each connector (fsi-dsp role cp_connect)
+#   6. health     -- connector/task state + log signatures
+#   7. stop       -- P <stc> (only with --tags stop)
+#
+# Usage:
+#   # run 1: preflight -> build -> install -> stage, stops at the gates
+#   ansible-playbook site.yml -e @inputs.yml -e @vault.yml --ask-vault-pass
+#
+#   # tickets: RACFSTC/RACFRING (security), PROCCOPY (sysprog), firewall (network)
+#
+#   # run 2: start -> register -> health
+#   ansible-playbook site.yml -e @inputs.yml -e @vault.yml --ask-vault-pass \
+#     -e gates_confirmed=true --tags start,register,health
+#
+#   # render and lint everything locally, touch nothing on z/OS:
+#   ansible-playbook site.yml -e @inputs.yml -e @vault.yml --ask-vault-pass \
+#     --tags build --skip-tags preflight
+# =============================================================================
+
+# --- Play 0: preflight ------------------------------------------------------------
+# Plain SSH, not ibm_zos_core modules: the collection needs IBM Python and ZOAU
+# on the target, and those are among the things being checked.
+- name: Preflight -- controller and z/OS prerequisites
+  hosts: zos_connect
+  gather_facts: false
+  tags:
+    - preflight
+    - always
+  vars_files:
+    - vars/derived.yml
+  tasks:
+    - name: Assert this controller can run ibm.ibm_zos_core 2.1
+      ansible.builtin.assert:
+        that:
+          - ansible_version.full is version('2.16', '>=')
+        fail_msg: >-
+          ansible-core {{ ansible_version.full }} is too old: ibm.ibm_zos_core 2.1
+          requires ansible-core >= 2.16 (meta/runtime.yml).
+        success_msg: "ansible-core {{ ansible_version.full }}"
+      run_once: true
+      delegate_to: localhost
+
+    # Invoked through bash so a checkout without the exec bit still works.
+    - name: Run preflight.sh against the z/OS host
+      ansible.builtin.command:
+        argv:
+          - bash
+          - "{{ playbook_dir }}/preflight.sh"
+      environment:
+        ZOS_HOST: "{{ ansible_host | default(inventory_hostname) }}"
+        ZOS_USER: "{{ ansible_user }}"
+        ZOS_SSH_PORT: "{{ ansible_port | default(22) }}"
+        ZOS_SSH_KEY: "{{ ansible_ssh_private_key_file | default('') }}"
+        ZOS_PYZ: "{{ zos_pyz }}"
+        ZOS_ZOAU: "{{ zos_zoau }}"
+        ZOS_JAVA_HOME: "{{ zos_java_home }}"
+        ZOS_BASH: "{{ zos_bash_path }}"
+        ZOS_CODESET: "{{ zos_expected_codeset }}"
+        INSTALL_DIR: "{{ connect_base_dir }}"
+        MIN_FREE_KB: "{{ preflight_min_free_kb }}"
+        MQ_INSTALL_PATH: "{{ mq_install_path }}"
+        MQ_HLQ: "{{ mq_hlq }}"
+        MQ_JARS: "{{ mq_client_jars | join(' ') }}"
+        KAFKA_BOOTSTRAP: "{{ kafka_bootstrap }}"
+        ZIIP_CONFIRMED: "{{ 'yes' if (preflight_ziip_confirmed | bool) else 'no' }}"
+        CONNECT_TARBALL: "{{ connect_tarball }}"
+        CONNECT_TOPDIR: "{{ connect_tarball_topdir }}"
+        CONNECTOR_ZIPS: "{{ ([mq_source_connector_zip] + ([mq_sink_connector_zip] if (mq_sink_enabled | bool) else [])) | join(' ') }}"
+      register: _preflight
+      changed_when: false
+      failed_when: false
+      delegate_to: localhost
+      vars:
+        ansible_python_interpreter: "{{ ansible_playbook_python }}"
+
+    - name: Show the preflight report
+      ansible.builtin.debug:
+        msg: "{{ _preflight.stdout_lines + _preflight.stderr_lines }}"
+
+    - name: Stop if preflight failed
+      ansible.builtin.fail:
+        msg: "preflight.sh exited {{ _preflight.rc }}; fix the [FAIL] lines above before anything touches z/OS."
+      when: _preflight.rc != 0
+
+# --- Play 1: build (controller only) ---------------------------------------------
+- name: Build -- repack, render and lint on the controller
+  hosts: zos_connect
+  gather_facts: false
+  tags:
+    - build
+  vars_files:
+    - vars/derived.yml
+    - vars/connectors.yml
+  tasks:
+    - name: Build on the controller
+      delegate_to: localhost
+      vars:
+        ansible_python_interpreter: "{{ ansible_playbook_python }}"
+      block:
+        - name: Import build tasks
+          ansible.builtin.import_tasks: tasks/build.yml
+
+# --- Play 2: install ---------------------------------------------------------------
+- name: Install -- Connect on Z into z/OS UNIX
+  hosts: zos_connect
+  gather_facts: false
+  tags:
+    - install
+  environment: "{{ zos_environment }}"
+  vars_files:
+    - vars/derived.yml
+  tasks:
+    - name: Import install tasks
+      ansible.builtin.import_tasks: tasks/install.yml
+
+# --- Play 3: stage gated artifacts -------------------------------------------------
+- name: Stage -- PROC, gated jobs and CA certificate in the installer's HLQ
+  hosts: zos_connect
+  gather_facts: false
+  tags:
+    - stage
+  environment: "{{ zos_environment }}"
+  vars_files:
+    - vars/derived.yml
+  tasks:
+    - name: Import stage tasks
+      ansible.builtin.import_tasks: tasks/stage.yml
+
+# --- Play 4: start (only after the gates) ------------------------------------------
+- name: Start -- verify gates, start the task, wait for the REST API
+  hosts: zos_connect
+  gather_facts: false
+  tags:
+    - start
+  environment: "{{ zos_environment }}"
+  vars_files:
+    - vars/derived.yml
+  tasks:
+    - name: Start only after the approval gates
+      when: gates_confirmed | default(false) | bool
+      block:
+        - name: Import start tasks
+          ansible.builtin.import_tasks: tasks/start.yml
+
+# --- Play 5: register connectors ----------------------------------------------------
+# Any worker accepts the PUT; the first inventory host's REST URL is used.
+- name: Register -- PUT the MQ connectors
+  hosts: localhost
+  connection: local
+  gather_facts: false
+  tags:
+    - register
+  vars_files:
+    - vars/derived.yml
+    - vars/connectors.yml
+  tasks:
+    # cp_connectors is cp_connect's existing interface name; renaming it is out
+    # of scope for this scenario.
+    - name: Register connectors through fsi-dsp cp_connect  # noqa: var-naming[no-role-prefix]
+      when: (gates_confirmed | default(false) | bool) or ('register' in ansible_run_tags)
+      ansible.builtin.include_role:
+        name: cp_connect
+      vars:
+        cp_connect_url: "{{ connect_rest_url }}"
+        cp_connectors: "{{ mq_connectors }}"
+        cp_connect_health_retries: 12
+        cp_connect_health_delay: 10
+
+# --- Play 6: health -------------------------------------------------------------------
+- name: Health -- connector state and log signatures
+  hosts: zos_connect
+  gather_facts: false
+  tags:
+    - health
+  environment: "{{ zos_environment }}"
+  vars_files:
+    - vars/derived.yml
+    - vars/connectors.yml
+  tasks:
+    - name: Check health
+      when: (gates_confirmed | default(false) | bool) or ('health' in ansible_run_tags)
+      block:
+        - name: Import health tasks
+          ansible.builtin.import_tasks: tasks/health.yml
+
+# --- Play 7: stop (explicit only) -----------------------------------------------------
+- name: Stop -- P the started task
+  hosts: zos_connect
+  gather_facts: false
+  tags:
+    - never
+    - stop
+  environment: "{{ zos_environment }}"
+  vars_files:
+    - vars/derived.yml
+  tasks:
+    - name: Stop the started task (SIGTERM; Connect shuts down cleanly)
+      ibm.ibm_zos_core.zos_operator:
+        cmd: "P {{ stc_name }}"
+        wait_time: 5
+      register: _stop
+      changed_when: true
+
+    - name: Show the operator response
+      ansible.builtin.debug:
+        msg: "{{ _stop.stdout_lines | default([]) }}"

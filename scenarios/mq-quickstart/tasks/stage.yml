@@ -1,0 +1,56 @@
+---
+# =============================================================================
+# Stage -- gated artifacts into the installer's own HLQ (runs on the z/OS host)
+# =============================================================================
+# Writing your own HLQ needs no approval. Submitting these jobs does, so the
+# playbook only stages them. The same text sits in out/<host>/jcl/ on the
+# controller for the change tickets.
+# =============================================================================
+
+- name: Allocate the staging library
+  ibm.ibm_zos_core.zos_data_set:
+    name: "{{ stage_cntl }}"
+    type: pds
+    record_format: fb
+    record_length: 80
+    space_primary: 1
+    space_secondary: 1
+    space_type: cyl
+    directory_blocks: 10
+    state: present
+
+- name: Stage the PROC and the gated jobs as members
+  ibm.ibm_zos_core.zos_copy:
+    src: "{{ out_dir }}/jcl/{{ item }}.jcl"
+    dest: "{{ stage_cntl }}({{ item }})"
+    replace: true
+  loop: "{{ [stc_name, 'RACFSTC', 'PROCCOPY'] + (['RACFRING'] if (racf_keyring_enabled | bool) else []) }}"
+
+# RACDCERT ADD reads a cataloged VB sequential data set, not a z/OS UNIX file.
+- name: Stage the CA certificate for RACDCERT ADD
+  ibm.ibm_zos_core.zos_copy:
+    src: "{{ racf_ca_pem }}"
+    dest: "{{ stage_cacert }}"
+    dest_data_set:
+      type: seq
+      record_format: vb
+      record_length: 84
+    replace: true
+  when: racf_ca_stage_needed | bool
+
+- name: Approval gates -- what has to happen before the start run
+  ansible.builtin.debug:
+    msg: "{{ _gates | select | list }}"
+  vars:
+    _ring_gate: >-
+      SECURITY  review + submit {{ stage_cntl }}(RACFRING): key ring
+      {{ racf_keyring }} + IRR.DIGTCERT.LISTRING READ
+    _gates:
+      - "SECURITY  review + submit {{ stage_cntl }}(RACFSTC): STARTED {{ stc_name }}.* -> {{ stc_user }}/{{ stc_group }}"
+      - "{{ _ring_gate if (racf_keyring_enabled | bool) else '' }}"
+      - "SYSPROG   review + submit {{ stage_cntl }}(PROCCOPY): {{ stc_name }} into {{ target_proclib }}"
+      - "NETWORK   outbound {{ kafka_bootstrap }} from the LPAR (preflight tested it)"
+      - "NETWORK   inbound TCP {{ connect_rest_port }} to {{ connect_rest_host }} from this controller"
+      - "Copies for the tickets: {{ out_dir }}/jcl/"
+      - "Then re-run with: -e gates_confirmed=true --tags start,register,health"
+  when: not (gates_confirmed | default(false) | bool)

@@ -1,0 +1,66 @@
+---
+# =============================================================================
+# Derived values -- computed from inputs.yml, never set by hand
+# =============================================================================
+# One place for every path and name the templates, tasks and preflight share,
+# so the PROC, STDENV, start script and worker properties cannot drift apart
+# (the guide mixed confluent-connect-7.5.2-zOS and confluent-7.6.1 paths).
+# =============================================================================
+
+# --- z/OS UNIX layout under connect_base_dir --------------------------------
+connect_home: "{{ connect_base_dir }}/{{ connect_tarball_topdir }}"
+connect_config_dir: "{{ connect_base_dir }}/config"
+connect_bin_dir: "{{ connect_base_dir }}/bin"
+connect_logs_dir: "{{ connect_base_dir }}/logs"
+connect_plugins_dir: "{{ connect_base_dir }}/plugins"
+connect_stage_dir: "{{ connect_base_dir }}/stage"
+stdenv_path: "{{ connect_config_dir }}/connect.env"
+start_script_path: "{{ connect_bin_dir }}/start-connect.sh"
+stdout_path: "{{ connect_logs_dir }}/{{ stc_name | lower }}.out"
+stderr_path: "{{ connect_logs_dir }}/{{ stc_name | lower }}.err"
+
+# Confluent's Connect on z/OS page lists exactly these for iconv to IBM-1047.
+# Everything else in the tarball (jars, share/) must stay binary.
+connect_scripts_to_convert:
+  - bin/connect-distributed.sh
+  - bin/kafka-run-class.sh
+
+# --- Staging data sets (installer's own HLQ; no approval needed) -------------
+stage_cntl: "{{ stage_hlq }}.{{ stc_name }}.CNTL"
+stage_cacert: "{{ stage_hlq }}.{{ stc_name }}.CACERT"
+
+# --- Controller side -----------------------------------------------------------
+# out_root defaults to this scenario; the tests point it at a temp directory.
+out_dir: "{{ out_root | default(playbook_dir) }}/out/{{ inventory_hostname }}"
+bundle_path: "{{ out_dir }}/connect-zos-bundle.tar"
+
+# --- Kafka connection ------------------------------------------------------------
+connect_rest_url: "http://{{ connect_rest_host }}:{{ connect_rest_port }}"
+connect_config_topic: "{{ connect_group_id }}-configs"
+connect_offset_topic: "{{ connect_group_id }}-offsets"
+connect_status_topic: "{{ connect_group_id }}-status"
+kafka_sasl_jaas_config: >-
+  org.apache.kafka.common.security.plain.PlainLoginModule required
+  username="{{ kafka_api_key }}" password="{{ kafka_api_secret }}";
+
+# --- Switches ----------------------------------------------------------------------
+mq_sink_enabled: "{{ (mq_sink_connector_zip | default('')) | length > 0 }}"
+racf_keyring_enabled: "{{ tls_truststore == 'racf_keyring' }}"
+racf_ca_stage_needed: "{{ (racf_keyring_enabled | bool) and not (racf_ca_already_defined | bool) }}"
+
+# --- Health: log signatures of the failures that eat install time ------------------
+health_log_patterns:
+  - pattern: "ClassNotFoundException|NoClassDefFoundError"
+    hint: "MQ jar missing from a connector lib/ (check the symlinks) or plugin.path wrong"
+  - pattern: "UnsatisfiedLinkError|mqjbnd"
+    hint: "LIBPATH lacks <mq>/java/lib, or the PROC STEPLIB lacks SCSQAUTH/SCSQANLE"
+  - pattern: "Missing required configuration"
+    hint: "worker properties unreadable; likely encoding (try connect_props_encoding: ISO8859-1)"
+  - pattern: "MQRC_|MQJE[0-9]|JMSWMQ[0-9]"
+    hint: "IBM MQ error: queue manager / queue names, or RACF access to the queue"
+  - pattern: "SaslAuthenticationException|Authentication failed"
+    hint: "Kafka API key or secret rejected"
+  - pattern: "SSLHandshakeException|PKIX path"
+    hint: "TLS trust: keyring contents, LISTRING permit, or tls_truststore choice"
+  - pattern: "FSUM[0-9]|EDC5[0-9]"
+    hint: "z/OS UNIX shell or file error: shebang, encoding tag, or permissions"

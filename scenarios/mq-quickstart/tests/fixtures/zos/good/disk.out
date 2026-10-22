@@ -1,0 +1,4 @@
+writable=yes
+dir=/u/kafconn
+Filesystem           1024-blocks      Used Available Capacity Mounted on
+OMVS.ZFS.KAFCONN        10485760    524288   9961472       5% /u/kafconn

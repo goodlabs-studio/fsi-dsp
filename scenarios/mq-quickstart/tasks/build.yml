@@ -1,0 +1,170 @@
+---
+# =============================================================================
+# Build -- runs on the controller (the play delegates this file to localhost)
+# =============================================================================
+# Everything z/OS will run is produced and linted here first, so a reviewer
+# can read out/<host>/ before anything is copied, and the guide's defects are
+# caught in seconds instead of at S time.
+# =============================================================================
+
+- name: Assert inputs.yml has no placeholders left
+  ansible.builtin.assert:
+    that:
+      - "'<PLACEHOLDER' not in (item | string)"
+    fail_msg: "inputs.yml still has a placeholder: {{ item }}"
+    quiet: true
+  loop:
+    - "{{ connect_tarball }}"
+    - "{{ mq_source_connector_zip }}"
+    - "{{ kafka_bootstrap }}"
+    - "{{ connect_rest_host }}"
+    - "{{ mq_queue_manager }}"
+    - "{{ mq_source_queue }}"
+    - "{{ mq_source_topic }}"
+    - "{{ mq_source_connector_name }}"
+    - "{{ (mq_sink_queue ~ mq_sink_topic ~ mq_sink_connector_name) if (mq_sink_enabled | bool) else '' }}"
+    - "{{ racf_ca_pem if (racf_ca_stage_needed | bool) else '' }}"
+
+- name: Assert the choices are ones the kit implements
+  ansible.builtin.assert:
+    that:
+      - tls_truststore in ['racf_keyring', 'jvm_default']
+      - connect_props_encoding in ['IBM-1047', 'ISO8859-1']
+      - (not (mq_sink_enabled | bool)) or (mq_sink_queue | length > 0 and mq_sink_topic | length > 0)
+    fail_msg: >-
+      tls_truststore must be racf_keyring or jvm_default; connect_props_encoding
+      IBM-1047 or ISO8859-1; an enabled sink needs mq_sink_queue and mq_sink_topic.
+
+- name: Assert names fit MVS rules (1-8 characters, national characters allowed)
+  ansible.builtin.assert:
+    that:
+      - item.value is match('^[A-Z@#$][A-Z0-9@#$]{0,7}$')
+    fail_msg: "{{ item.key }}={{ item.value }} is not a valid MVS name (uppercase, 1-8 characters)"
+    quiet: true
+  loop: "{{ {'stc_name': stc_name, 'stc_user': stc_user, 'stc_group': stc_group} | dict2items }}"
+
+- name: Assert data set qualifiers are valid
+  ansible.builtin.assert:
+    that:
+      - item is match('^[A-Z@#$][A-Z0-9@#$-]{0,7}(\.[A-Z@#$][A-Z0-9@#$-]{0,7})*$')
+      - item | length <= 44
+    fail_msg: "{{ item }} is not a valid data set name"
+    quiet: true
+  loop:
+    - "{{ stage_cntl }}"
+    - "{{ stage_cacert }}"
+    - "{{ target_proclib }}"
+    - "{{ mq_hlq }}.SCSQAUTH"
+
+- name: Create the output tree (0700, rendered files carry the API secret)
+  ansible.builtin.file:
+    path: "{{ out_dir }}/{{ item }}"
+    state: directory
+    mode: "0700"
+  loop:
+    - build/plugins
+    - rendered
+    - jcl
+    - connectors
+
+# --- Tarball: unpack, fix shebangs, repack without extended attributes --------
+# tar, not unarchive: unarchive refuses bsdtar ("GNU tar required"), which is
+# the tar on a macOS controller.
+- name: Unpack the Connect on z/OS tarball  # noqa: command-instead-of-module
+  ansible.builtin.command:
+    cmd: tar -xzf {{ connect_tarball | quote }} -C {{ (out_dir ~ '/build') | quote }}
+    creates: "{{ out_dir }}/build/{{ connect_tarball_topdir }}/bin/kafka-run-class.sh"
+
+- name: Assert the tarball has the layout Confluent documents
+  ansible.builtin.stat:
+    path: "{{ out_dir }}/build/{{ connect_tarball_topdir }}/{{ item }}"
+  loop: "{{ connect_scripts_to_convert + ['config'] }}"
+  register: _layout
+  failed_when: not _layout.stat.exists
+
+- name: Unpack the MQ connector archives into plugins/
+  ansible.builtin.unarchive:
+    src: "{{ item }}"
+    dest: "{{ out_dir }}/build/plugins"
+    remote_src: true
+  loop: "{{ [mq_source_connector_zip] + ([mq_sink_connector_zip] if (mq_sink_enabled | bool) else []) }}"
+
+# Kafka's scripts start with #!/bin/bash, which z/OS does not have. The PROC
+# runs start-connect.sh under bash explicitly, but connect-distributed.sh
+# execs kafka-run-class.sh through its own shebang.
+# mode is explicit. replace rewrites through a temp file, and ansible-core's
+# atomic_move chowns before it copies the mode, swallowing EPERM: when the
+# extracted file's group is one you are not in, the script ends up 0600 and
+# not executable on z/OS. It also covers archives that ship without exec bits.
+- name: Point the launcher shebangs at z/OS bash
+  ansible.builtin.replace:
+    path: "{{ out_dir }}/build/{{ connect_tarball_topdir }}/{{ item }}"
+    regexp: '\A#!.*$'
+    replace: "#!{{ zos_bash_path }}"
+    mode: "0755"
+  loop: "{{ connect_scripts_to_convert }}"
+
+# ustar, no xattrs: older z/OS tar cannot read pax headers or macOS metadata.
+# A path too long for ustar fails here, on the controller, not on z/OS.
+# No archive module exposes --format=ustar / --no-xattrs.
+- name: Repack Connect and the plugins into one bundle  # noqa: command-instead-of-module
+  ansible.builtin.command:
+    cmd: >-
+      tar --format=ustar --no-xattrs -cf {{ bundle_path | quote }}
+      -C {{ (out_dir ~ '/build') | quote }} {{ connect_tarball_topdir | quote }} plugins
+  environment:
+    COPYFILE_DISABLE: "1"
+  changed_when: true
+
+# --- Render ------------------------------------------------------------------------
+- name: Render the worker, STDENV, log4j2 and start script
+  ansible.builtin.template:
+    src: "{{ item }}.j2"
+    dest: "{{ out_dir }}/rendered/{{ item }}"
+    mode: "0600"
+  loop:
+    - connect-distributed.properties
+    - connect.env
+    - connect-log4j2.yaml
+    - start-connect.sh
+
+- name: Render the PROC
+  ansible.builtin.template:
+    src: KAFCONN.jcl.j2
+    dest: "{{ out_dir }}/jcl/{{ stc_name }}.jcl"
+    mode: "0600"
+
+- name: Render the gated jobs
+  ansible.builtin.template:
+    src: "gated/{{ item }}.jcl.j2"
+    dest: "{{ out_dir }}/jcl/{{ item }}.jcl"
+    mode: "0600"
+  loop: "{{ ['RACFSTC', 'PROCCOPY'] + (['RACFRING'] if (racf_keyring_enabled | bool) else []) }}"
+
+- name: Write the connector configs (flat PUT bodies)
+  ansible.builtin.copy:
+    content: "{{ item.config | to_nice_json(indent=2) }}\n"
+    dest: "{{ out_dir }}/connectors/{{ item.name }}.json"
+    mode: "0600"
+  loop: "{{ mq_connectors }}"
+  loop_control:
+    label: "{{ item.name }}"
+
+# --- Lint ---------------------------------------------------------------------------
+- name: Lint everything z/OS will read
+  ansible.builtin.command:
+    argv:
+      - "{{ ansible_playbook_python }}"
+      - "{{ playbook_dir }}/tools/zos_lint.py"
+      - "{{ out_dir }}/rendered"
+      - "{{ out_dir }}/jcl"
+      - "{{ out_dir }}/connectors"
+      - "{{ out_dir }}/build/{{ connect_tarball_topdir }}/bin/connect-distributed.sh"
+      - "{{ out_dir }}/build/{{ connect_tarball_topdir }}/bin/kafka-run-class.sh"
+  register: _lint
+  changed_when: false
+  failed_when: _lint.rc != 0
+
+- name: Show the lint result
+  ansible.builtin.debug:
+    msg: "{{ _lint.stdout_lines }}"

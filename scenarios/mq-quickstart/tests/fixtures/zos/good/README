@@ -1,0 +1,8 @@
+Answers the fake ssh (tests/fixtures/bin/ssh) gives for a z/OS image that meets
+every prerequisite. One file per preflight check: <check>.out is the command's
+output, <check>.rc its exit status (default 0).
+
+The formats follow IBM's documented examples, not captures from a live system:
+uname -I (z/OS UNIX Command Reference), D M=CPU (IEE174I, MVS System Commands),
+Semeru -version, zoaversion. Re-capture them from a real LPAR when one is
+available; the parsers report FAIL, never pass, on anything they cannot read.

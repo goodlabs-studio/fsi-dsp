@@ -1,0 +1,7 @@
+com.ibm.mq.allclient.jar
+com.ibm.mq.jmqi.jar
+com.ibm.mq.traceControl.jar
+com.ibm.mqjms.jar
+jms.jar
+libmqjbnd.so
+libmqjbnd64.so

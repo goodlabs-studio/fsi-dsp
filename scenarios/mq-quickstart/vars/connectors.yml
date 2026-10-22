@@ -1,0 +1,55 @@
+---
+# =============================================================================
+# Connector definitions -- the flat config bodies for PUT /connectors/{name}/config
+# =============================================================================
+# Shape matches fsi-dsp's cp_connect role: {name, config}. The guide POSTed a
+# {"name", "config"} wrapper; PUT takes the config map itself and is
+# create-or-update, so a re-run is safe (Confluent Connect REST API reference).
+# All values are strings: Connect validates types itself.
+# =============================================================================
+
+mq_source_connector:
+  name: "{{ mq_source_connector_name }}"
+  config:
+    connector.class: io.confluent.connect.ibm.mq.IbmMQSourceConnector
+    # The z/OS-certified source is 12.1.1; exactly-once needs 13.x and a single
+    # task, so this is at-least-once. One task keeps queue order.
+    tasks.max: "1"
+    mq.queue.manager: "{{ mq_queue_manager }}"
+    # The generic default is "client". Bindings is the reason this runs on Z:
+    # cross-memory to the local queue manager, no channel.
+    mq.transport.type: bindings
+    jms.destination.name: "{{ mq_source_queue }}"
+    jms.destination.type: queue
+    kafka.topic: "{{ mq_source_topic }}"
+    # Premium connector: the license client needs its own connection settings
+    # in the connector config on Confluent Cloud (Confluent CC Connect docs).
+    confluent.license: "{{ confluent_license }}"
+    confluent.topic.bootstrap.servers: "{{ kafka_bootstrap }}"
+    confluent.topic.replication.factor: "3"
+    confluent.topic.security.protocol: SASL_SSL
+    confluent.topic.sasl.mechanism: PLAIN
+    confluent.topic.sasl.jaas.config: "{{ kafka_sasl_jaas_config }}"
+
+mq_sink_connector:
+  name: "{{ mq_sink_connector_name }}"
+  config:
+    connector.class: io.confluent.connect.jms.IbmMqSinkConnector
+    tasks.max: "1"
+    topics: "{{ mq_sink_topic }}"
+    mq.queue.manager: "{{ mq_queue_manager }}"
+    mq.transport.type: bindings
+    # The sink's validator requires mq.hostname or mq.connection.list even in
+    # bindings mode (Confluent IBM MQ Sink config reference); bindings does not
+    # connect through it. Not verified on the z/OS sink 2.1.2.
+    mq.hostname: localhost
+    jms.destination.name: "{{ mq_sink_queue }}"
+    jms.destination.type: queue
+    confluent.license: "{{ confluent_license }}"
+    confluent.topic.bootstrap.servers: "{{ kafka_bootstrap }}"
+    confluent.topic.replication.factor: "3"
+    confluent.topic.security.protocol: SASL_SSL
+    confluent.topic.sasl.mechanism: PLAIN
+    confluent.topic.sasl.jaas.config: "{{ kafka_sasl_jaas_config }}"
+
+mq_connectors: "{{ [mq_source_connector] + ([mq_sink_connector] if (mq_sink_enabled | bool) else []) }}"

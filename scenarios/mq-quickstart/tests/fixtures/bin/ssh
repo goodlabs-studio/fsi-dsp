@@ -1,0 +1,22 @@
+#!/usr/bin/env bash
+# Fake ssh for tests/test_preflight.py. preflight.sh tags every remote command
+# ": check=<name>; ...". This answers from $FAKE_ZOS_DIR/<name>.out, with the
+# exit status in <name>.rc (default 0). No .out file means the command fails
+# (rc 1), the way a missing binary would. Each call is logged to calls.log.
+set -euo pipefail
+remote="${!#}"
+printf '%s\n' "${remote}" >>"${FAKE_ZOS_DIR}/calls.log"
+name=$(sed -n 's/^: check=\([A-Za-z0-9_-]*\);.*/\1/p' <<<"${remote}")
+if [[ -z "${name}" ]]; then
+  echo "fake ssh: untagged remote command: ${remote}" >&2
+  exit 99
+fi
+rc=0
+[[ -f "${FAKE_ZOS_DIR}/${name}.rc" ]] && rc=$(cat "${FAKE_ZOS_DIR}/${name}.rc")
+if [[ -f "${FAKE_ZOS_DIR}/${name}.out" ]]; then
+  cat "${FAKE_ZOS_DIR}/${name}.out"
+else
+  echo "FSUM7351 not found: ${name}" >&2
+  rc=1
+fi
+exit "${rc}"
