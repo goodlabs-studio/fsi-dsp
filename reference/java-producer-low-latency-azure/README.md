@@ -39,7 +39,7 @@ Same as standard variant. The variant is a drop-in replacement when the latency 
 
 ```java
 Map<String, String> config = Map.of(
-    "topic", "fraud.signals.v1.signal-event",
+    "topic.name", "fraud.signals.v1.signal-event",   // FsiProducer requires topic.name
     "bootstrap.servers", "<cc-cluster>:9092",
     "schema.registry.url", "https://psrc-...azure.confluent.cloud",
     "client.id", "fraud-publisher-1"
@@ -49,6 +49,28 @@ try (FsiProducer producer = new FsiProducer(config)) {
     producer.send(key, avroValue);  // fire-and-forget with idempotent guarantee
 }
 ```
+
+## Build & test
+
+Requires JDK 17 and Maven 3.9+. The tests are offline: they use Kafka's `MockProducer`/`MockConsumer`, so no broker, Schema Registry or network access is needed (Maven only downloads dependencies).
+
+```bash
+cd reference/java-producer-low-latency-azure
+mvn -B verify          # compile, generate Avro classes from schemas/, run tests
+mvn -B test -Dtest=FsiProducerTest#failedSendIsRoutedToDlqWithErrorHeaders   # run one test
+```
+
+`mvn verify` writes build output to `target/` (git-ignored). CI runs the same command for all four Java reference clients (`.github/workflows/java-reference.yml`).
+
+The tests double as usage examples. They cover:
+
+- **FSI config invariants:** `acks=all`, idempotence, `max.in.flight=5`, unbounded retries, Avro + Schema Registry, SASL_SSL, client-id derivation, `topic.name` required.
+- **Variant tuning,** and that every property is one the Java client or Avro serializer actually recognises.
+- **Send path:** keyed records land on the configured topic, `sendSync()` returns metadata, and a failed send is dead-lettered to `<topic>.dlq` with `dlq.*` headers. KNOWN GAP: the DLQ record has no payload, and retryable errors are not retried first.
+- **DLQ handler:** retryable vs non-retryable classification, 1s/2s/4s backoff, error categories, and 1024-char message truncation.
+- **Azure ILB connection recycling** (`connections.max.idle.ms`, `reconnect.backoff.max.ms`). KNOWN ISSUE: `socket.keepalive.enable` is a librdkafka-only property that the Java client ignores (see Tradeoffs).
+
+Tests marked **KNOWN GAP** / **KNOWN ISSUE** pin down current behaviour that a production adopter must change. Fix the code, then update the assertion.
 
 ## Tradeoffs
 

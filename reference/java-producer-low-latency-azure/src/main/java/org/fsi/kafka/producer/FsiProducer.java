@@ -31,7 +31,7 @@ public class FsiProducer implements AutoCloseable {
 
     private static final Logger log = LoggerFactory.getLogger(FsiProducer.class);
 
-    private final KafkaProducer<String, GenericRecord> producer;
+    private final Producer<String, GenericRecord> producer;
     private final String topicName;
     private final FsiDlqHandler dlqHandler;
 
@@ -56,7 +56,7 @@ public class FsiProducer implements AutoCloseable {
             throw new IllegalArgumentException("topic.name is required");
         }
 
-        Properties props = buildProperties(config);
+        Properties props = buildProperties(config, topicName);
         this.producer = new KafkaProducer<>(props);
 
         registerJmxMetrics();
@@ -68,10 +68,21 @@ public class FsiProducer implements AutoCloseable {
     }
 
     /**
+     * Test seam: inject a {@link Producer} (e.g. Kafka's MockProducer) and a DLQ
+     * handler so send/error paths can be tested without a broker or Schema
+     * Registry. Not part of the public API.
+     */
+    FsiProducer(String topicName, Producer<String, GenericRecord> producer, FsiDlqHandler dlqHandler) {
+        this.topicName = topicName;
+        this.producer = producer;
+        this.dlqHandler = dlqHandler;
+    }
+
+    /**
      * Build Kafka producer properties with C4E defaults.
      * These defaults are non-negotiable for FSI production topics.
      */
-    private Properties buildProperties(Map<String, String> config) {
+    static Properties buildProperties(Map<String, String> config, String topicName) {
         Properties props = new Properties();
 
         // ── Connection (from Consul DNS + Vault) ──

@@ -1,0 +1,68 @@
+# =============================================================================
+# java-reference.yml — build + offline tests for the Java reference clients
+# =============================================================================
+# Runs `mvn -B verify` (compile, Avro codegen from schemas/, JUnit 5 tests) for
+# each of the four reference/java-* projects.
+#
+# The tests are offline: they use Kafka's MockProducer/MockConsumer, so no
+# broker, Schema Registry or secrets are needed. Maven only downloads
+# dependencies from Maven Central and packages.confluent.io.
+#
+# schemas/** is a trigger because the producers generate Avro classes from
+# ../../schemas at build time; an invalid .avsc breaks their build.
+# =============================================================================
+
+name: Java Reference Clients
+
+on:
+  pull_request:
+    paths:
+      - 'reference/java-*/**'
+      - 'schemas/**'
+      - '.github/workflows/java-reference.yml'
+  push:
+    branches:
+      - main
+    paths:
+      - 'reference/java-*/**'
+      - 'schemas/**'
+      - '.github/workflows/java-reference.yml'
+
+permissions:
+  contents: read
+
+jobs:
+  build-and-test:
+    name: ${{ matrix.project }}
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false   # report every broken client, not just the first
+      matrix:
+        project:
+          - java-producer
+          - java-producer-low-latency-azure
+          - java-consumer
+          - java-consumer-low-latency-azure
+    defaults:
+      run:
+        working-directory: reference/${{ matrix.project }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up JDK 17
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+          cache: maven
+          cache-dependency-path: reference/${{ matrix.project }}/pom.xml
+
+      - name: Build and test
+        run: mvn -B -ntp verify
+
+      - name: Upload test reports on failure
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: surefire-reports-${{ matrix.project }}
+          path: reference/${{ matrix.project }}/target/surefire-reports/

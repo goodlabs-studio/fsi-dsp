@@ -67,6 +67,13 @@
             <artifactId>slf4j-simple</artifactId>
             <version>${slf4j.version}</version>
         </dependency>
+        <!-- Tests (offline: MockProducer/MockConsumer, no broker or Schema Registry) -->
+        <dependency>
+            <groupId>org.junit.jupiter</groupId>
+            <artifactId>junit-jupiter</artifactId>
+            <version>5.10.2</version>
+            <scope>test</scope>
+        </dependency>
     </dependencies>
 
     <!-- Avro code generation plugin -->
@@ -86,6 +93,12 @@
                         </configuration>
                     </execution>
                 </executions>
+            </plugin>
+            <!-- Surefire 3.x runs JUnit 5 natively (the Maven 3 default 2.12 does not) -->
+            <plugin>
+                <groupId>org.apache.maven.plugins</groupId>
+                <artifactId>maven-surefire-plugin</artifactId>
+                <version>3.2.5</version>
             </plugin>
         </plugins>
     </build>

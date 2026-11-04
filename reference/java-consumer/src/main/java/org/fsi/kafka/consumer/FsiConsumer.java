@@ -39,7 +39,7 @@ public class FsiConsumer implements AutoCloseable {
 
     private static final Logger log = LoggerFactory.getLogger(FsiConsumer.class);
 
-    private final KafkaConsumer<String, GenericRecord> consumer;
+    private final Consumer<String, GenericRecord> consumer;
     private final List<String> topics;
     private final BiConsumer<String, GenericRecord> recordHandler;
     private final AtomicBoolean running = new AtomicBoolean(false);
@@ -67,7 +67,19 @@ public class FsiConsumer implements AutoCloseable {
         log.info("FSI Consumer initialized for topics: {}", topics);
     }
 
-    private Properties buildProperties(Map<String, String> config) {
+    /**
+     * Test seam: inject a {@link Consumer} (e.g. Kafka's MockConsumer) so the
+     * consume/commit loop can be tested without a broker or Schema Registry.
+     * Does not register JMX metrics or a JVM shutdown hook. Not part of the public API.
+     */
+    FsiConsumer(List<String> topics, Consumer<String, GenericRecord> consumer,
+                BiConsumer<String, GenericRecord> handler) {
+        this.topics = topics;
+        this.consumer = consumer;
+        this.recordHandler = handler;
+    }
+
+    static Properties buildProperties(Map<String, String> config) {
         Properties props = new Properties();
 
         // ── Connection ──
