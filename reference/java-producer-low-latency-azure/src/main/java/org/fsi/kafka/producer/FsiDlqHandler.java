@@ -1,6 +1,7 @@
 package org.fsi.kafka.producer;
 
 import org.apache.kafka.clients.producer.KafkaProducer;
+import org.apache.kafka.clients.producer.Producer;
 import org.apache.kafka.clients.producer.ProducerConfig;
 import org.apache.kafka.clients.producer.ProducerRecord;
 import org.apache.kafka.common.header.internals.RecordHeader;
@@ -40,13 +41,13 @@ public class FsiDlqHandler implements AutoCloseable {
     /** Exception types that should NOT be retried. */
     private static final Set<Class<? extends Exception>> NON_RETRYABLE = new HashSet<>(Arrays.asList(
             org.apache.kafka.common.errors.SerializationException.class,
-            org.apache.kafka.common.errors.InvalidRecordException.class,
+            org.apache.kafka.common.InvalidRecordException.class,
             org.apache.kafka.common.errors.RecordTooLargeException.class,
             org.apache.kafka.common.errors.TopicAuthorizationException.class,
             org.apache.kafka.common.errors.GroupAuthorizationException.class
     ));
 
-    private final KafkaProducer<byte[], byte[]> dlqProducer;
+    private final Producer<byte[], byte[]> dlqProducer;
     private final String dlqTopic;
     private final String sourceTopic;
     private final String clientId;
@@ -87,6 +88,17 @@ public class FsiDlqHandler implements AutoCloseable {
 
         this.dlqProducer = new KafkaProducer<>(props);
         log.info("DLQ handler initialized. DLQ topic: {}", dlqTopic);
+    }
+
+    /**
+     * Test seam: inject any {@link Producer} (e.g. Kafka's MockProducer) so the
+     * DLQ routing can be exercised without a broker. Not part of the public API.
+     */
+    FsiDlqHandler(String sourceTopic, String clientId, Producer<byte[], byte[]> dlqProducer) {
+        this.sourceTopic = sourceTopic;
+        this.dlqTopic = sourceTopic + ".dlq";
+        this.clientId = clientId;
+        this.dlqProducer = dlqProducer;
     }
 
     /**
@@ -155,7 +167,7 @@ public class FsiDlqHandler implements AutoCloseable {
      */
     public String classifyError(Exception e) {
         if (e instanceof org.apache.kafka.common.errors.SerializationException
-                || e instanceof org.apache.kafka.common.errors.InvalidRecordException
+                || e instanceof org.apache.kafka.common.InvalidRecordException
                 || e instanceof org.apache.kafka.common.errors.RecordTooLargeException) {
             return "SERIALIZATION";
         }

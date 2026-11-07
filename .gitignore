@@ -6,3 +6,6 @@
 *.tfstate.backup
 .terraform/
 .terraform.lock.hcl
+
+# Maven build output (reference/java-*)
+target/

@@ -68,6 +68,28 @@ try (FsiConsumer consumer = new FsiConsumer(config, this::handleSignal)) {
 }
 ```
 
+## Build & test
+
+Requires JDK 17 and Maven 3.9+. The tests are offline: they use Kafka's `MockProducer`/`MockConsumer`, so no broker, Schema Registry or network access is needed (Maven only downloads dependencies).
+
+```bash
+cd reference/java-consumer-low-latency-azure
+mvn -B verify          # compile, generate Avro classes from schemas/, run tests
+mvn -B test -Dtest=FsiConsumerTest#workerProcessesRecordsAndPollThreadCommitsThem   # run one test
+```
+
+`mvn verify` writes build output to `target/` (git-ignored). CI runs the same command for all four Java reference clients (`.github/workflows/java-reference.yml`).
+
+The tests double as usage examples. They cover:
+
+- **FSI config invariants:** manual commit, `auto.offset.reset=earliest`, Avro `GenericRecord`, SASL_SSL, `group.id` and `topics` required.
+- **Variant tuning,** and that every property is one the Java client or Avro deserializer actually recognises.
+- **Decoupled poll/worker loop**, run on a background thread: records reach the handler in order, and offsets are committed after the batch. KNOWN GAP: a record whose handler throws is still committed, with no retry and no DLQ.
+- **Cooperative-sticky assignment and optional static membership** (`group.instance.id`).
+- **Azure ILB connection recycling.** KNOWN ISSUE: `socket.keepalive.enable` is ignored by the Java client.
+
+Tests marked **KNOWN GAP** / **KNOWN ISSUE** pin down current behaviour that a production adopter must change. Fix the code, then update the assertion.
+
 ## Tradeoffs
 
 **You give up:**
